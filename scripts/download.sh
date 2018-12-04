@@ -1,15 +1,15 @@
 #!/bin/bash
 # credit - https://gist.github.com/nudomarinero/95e903c8f79d02aceed8c1b2c05222d8
 # Images
-wget https://owncloud.ia2.inaf.it/index.php/s/UDiKqvuscDQViEt/download -O SKAMid_B1_8h.fit
-wget https://owncloud.ia2.inaf.it/index.php/s/2nTtGBWpzYJ5Ghr/download -O SKAMid_B1_100h.fit
-wget https://owncloud.ia2.inaf.it/index.php/s/DUNztYKW0PSlNH5/download -O SKAMid_B1_1000h.fit
-wget https://owncloud.ia2.inaf.it/index.php/s/zEW4JsefeMycR8p/download -O SKAMid_B2_8h.fit
-wget https://owncloud.ia2.inaf.it/index.php/s/8K750vop1yjZZXE/download -O SKAMid_B2_100h.fit
-wget https://owncloud.ia2.inaf.it/index.php/s/A7XjSZ3n1Kr57TV/download -O SKAMid_B2_1000h.fit
-wget https://owncloud.ia2.inaf.it/index.php/s/Uu7yhRjCYknle54/download -O SKAMid_B5_8h.fit
-wget https://owncloud.ia2.inaf.it/index.php/s/7lEeXlNvoYFmEfG/download -O SKAMid_B5_100h.fit
-wget https://owncloud.ia2.inaf.it/index.php/s/Wo7gqyfgpCqj2XY/download -O SKAMid_B5_1000h.fit
+wget https://owncloud.ia2.inaf.it/index.php/s/UDiKqvuscDQViEt/download -O SKAMid_B1_8h.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/2nTtGBWpzYJ5Ghr/download -O SKAMid_B1_100h.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/DUNztYKW0PSlNH5/download -O SKAMid_B1_1000h.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/zEW4JsefeMycR8p/download -O SKAMid_B2_8h.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/8K750vop1yjZZXE/download -O SKAMid_B2_100h.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/A7XjSZ3n1Kr57TV/download -O SKAMid_B2_1000h.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/Uu7yhRjCYknle54/download -O SKAMid_B5_8h.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/7lEeXlNvoYFmEfG/download -O SKAMid_B5_100h.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/Wo7gqyfgpCqj2XY/download -O SKAMid_B5_1000h.fits
 
 # Ancillary data
 wget https://owncloud.ia2.inaf.it/index.php/s/ZbaSDe7zGBYgxL1/download -O PrimaryBeam_B1.fits
