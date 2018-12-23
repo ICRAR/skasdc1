@@ -1,15 +1,16 @@
 #!/bin/bash
 # credit - https://gist.github.com/nudomarinero/95e903c8f79d02aceed8c1b2c05222d8
 # Images
-wget https://owncloud.ia2.inaf.it/index.php/s/UDiKqvuscDQViEt/download -O SKAMid_B1_8h.fits
-wget https://owncloud.ia2.inaf.it/index.php/s/2nTtGBWpzYJ5Ghr/download -O SKAMid_B1_100h.fits
-wget https://owncloud.ia2.inaf.it/index.php/s/DUNztYKW0PSlNH5/download -O SKAMid_B1_1000h.fits
-wget https://owncloud.ia2.inaf.it/index.php/s/zEW4JsefeMycR8p/download -O SKAMid_B2_8h.fits
-wget https://owncloud.ia2.inaf.it/index.php/s/8K750vop1yjZZXE/download -O SKAMid_B2_100h.fits
-wget https://owncloud.ia2.inaf.it/index.php/s/A7XjSZ3n1Kr57TV/download -O SKAMid_B2_1000h.fits
-wget https://owncloud.ia2.inaf.it/index.php/s/Uu7yhRjCYknle54/download -O SKAMid_B5_8h.fits
-wget https://owncloud.ia2.inaf.it/index.php/s/7lEeXlNvoYFmEfG/download -O SKAMid_B5_100h.fits
-wget https://owncloud.ia2.inaf.it/index.php/s/Wo7gqyfgpCqj2XY/download -O SKAMid_B5_1000h.fits
+# changed with V2 released by SKAO
+wget https://owncloud.ia2.inaf.it/index.php/s/AKM2CUAn1hQhtvO/download -O SKAMid_B1_8h_v2.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/7ihk8de9ILYY2dc/download -O SKAMid_B1_100h_v2.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/P9YaJVOROTqdKkF/download -O SKAMid_B1_1000h_v2.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/BUfFtgQVwfVsvnt/download -O SKAMid_B2_8h_v2.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/aASQCoevae5W6aI/download -O SKAMid_B2_100h_v2.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/pgEhVTTVs0rkVoV/download -O SKAMid_B2_1000h_v2.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/UTlfPUCddWYlZFB/download -O SKAMid_B5_8h_v2.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/t7aoXFbkH4fsmy1/download -O SKAMid_B5_100h_v2.fits
+wget https://owncloud.ia2.inaf.it/index.php/s/ldjHXaZToppJLdh/download -O SKAMid_B5_1000h_v2.fits
 
 # Ancillary data
 wget https://owncloud.ia2.inaf.it/index.php/s/ZbaSDe7zGBYgxL1/download -O PrimaryBeam_B1.fits
