@@ -1,6 +1,17 @@
 import os
+import os.path as osp
 
+import numpy as np
+import astropy.io.fits as pyfits
 import astropy.wcs as pywcs
+
+montage_path = '/home/ngas/software/Montage_v3.3/bin'
+subimg_exec = '%s/mSubimage' % montage_path
+regrid_exec = '%s/mProject' % montage_path
+imgtbl_exec = '%s/mImgtbl' % montage_path
+coadd_exec = '%s/mAdd' % montage_path
+subimg_cmd = '{0} %s %s %.4f %.4f %.4f %.4f'.format(subimg_exec)
+splitimg_cmd = '{0} -p %s %s %d %d %d %d'.format(subimg_exec)
 
 SDC1_HOME = '/Users/chen/gitrepos/ml/skasdc1'
 
@@ -32,9 +43,101 @@ def cutout_training_image(cat_csv, field_fits):
     Cutout a single training image that contains all the objects 
     on the training catalog from the "field_fits"
     """
-    pass
+    hdulist = pyfits.open(field_fits)
+    fhead = hdulist[0].header
+    w = pywcs.WCS(fhead)
+    xs = []
+    ys = []
+    szs = []
+    with open(cat_csv, 'r') as fin:
+        lines = fin.read().splitlines()
+        for line in lines[1:]: #skip the header
+            fds = line.split(',')
+            ra, dec = fds[3:5]
+            ra, dec = float(ra), float(dec)
+            size = float(fds[-5]) / 2.0
+            x, y = w.wcs_world2pix([[ra, dec, 0, 0]], 0)[0][0:2]
+            xs.append(x)
+            ys.append(y)
+            szs.append(size)
+    mesz = max(szs) / (float(fhead['CDELT1']) * 3600) # deg to arcsec
+    # need to add the potential source edge LAS or exponential scale length
+    # https://astronomy.swin.edu.au/cosmos/S/Scale+Length
+    x1, y1, x2, y2 = int(np.floor(min(xs) - mesz)), int(np.floor(min(ys) - mesz)),\
+                     int(np.ceil(max(xs) + mesz)), int(np.ceil(max(ys) + mesz))
+    print(x1, y1, x2, y2, mesz)
+    out_fname = field_fits.replace('.fits', '_train_image.fits')
+    print(splitimg_cmd % (field_fits, out_fname, x1, y1, (x2 - x1), (y2 - y1)))
+
+def gen_ds9_region(cat_csv, fits_img):
+    """
+    For B1
+    SIZE_CLASS, count
+    1_1,    4034
+    2_1,    380
+    2_2,    3728
+    2_3,    179946
+    3_3,    372
+    """
+    cons = 2 ** 0.5
+    hdulist = pyfits.open(fits_img)
+    fhead = hdulist[0].header
+    g = 2 * (float(fhead['CDELT1']) * 3600)
+    ellipses = []
+    cores = []
+    e_fmt = 'fk5; ellipse %sd %sd %f" %f" %fd'
+    c_fmt = 'fk5; point %sd %sd #point=cross 12'
+    with open(cat_csv, 'r') as fin:
+        lines = fin.read().splitlines()
+        for line in lines[1:4000]: #skip the header, test the first 200 only
+            fds = line.split(',')
+            size, clas = int(fds[-2]), int(fds[-1])
+            
+            ra_core, dec_core, ra_centroid, dec_centroid = fds[1:5]
+            bmaj = float(fds[7])
+            bmin = float(fds[8])
+            opa = float(fds[9])
+            pa = 360 - opa
+            if (2 == size): 
+                if (clas in [1, 3]): # extended source
+                    pass # don't change anything
+                else:
+                    # assuming core is not fully covered by source
+                    bmaj = bmaj / 2.0 + g / 10.0 
+                    bmin = bmaj #keep it circular Gaussian
+            else: # compact source [1 or 3]
+                # 1,2,3 for SS-AGNs, FS-AGNs, SFGs
+                # 1,2,3 for LAS, Gaussian, Exponential
+                if (1 == clas and 1 == size):
+                    bmaj /= 2.0
+                    bmin /= 2.0
+                elif (3 == clas and 3 == size):
+                    bmaj *= cons
+                    bmin *= cons
+                else:
+                    raise Exception('unknown combination')
+            
+            
+            #ellipses.append(e_fmt % (ra_centroid, dec_centroid, bmaj, bmin, pa))
+            ellipses.append(e_fmt % (ra_centroid, dec_centroid, bmin, bmaj, pa))
+            cores.append(c_fmt % (ra_core, dec_core))
+    
+    region_fn = cat_csv.replace('.csv', '.reg')
+    with open(region_fn, 'w') as fout:
+        for el, co in zip(ellipses, cores):
+            fout.write(el)
+            fout.write(os.linesep)
+            fout.write(co)
+            fout.write(os.linesep)
+    
 
 if __name__ == '__main__':
     cur_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = os.path.join(cur_dir, '..', 'data')
     train_file = 'TrainingSet_B5.txt'
-    convert_to_csv(os.path.join(cur_dir, '..', 'data', train_file))
+    train_csv = 'TrainingSet_B1.csv'
+    whole_field = 'SKAMid_B1_1000h_v2.fits'
+    train_field = 'SKAMid_B1_1000h_v2_train_image.fits'
+    #convert_to_csv(os.path.join(data_dir, train_file))
+    #cutout_training_image(osp.join(data_dir, train_csv), osp.join(data_dir, whole_field))
+    gen_ds9_region(osp.join(data_dir, train_csv), osp.join(data_dir, train_field))
