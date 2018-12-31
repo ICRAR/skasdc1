@@ -83,6 +83,8 @@ def gen_ds9_region(cat_csv, fits_img):
     hdulist = pyfits.open(fits_img)
     fhead = hdulist[0].header
     g = 2 * (float(fhead['CDELT1']) * 3600)
+    g2 = g ** 2
+    #TODO add psf factor properly (i.e. read bmaj/bmin from fits header)
     ellipses = []
     cores = []
     e_fmt = 'fk5; ellipse %sd %sd %f" %f" %fd'
@@ -94,32 +96,38 @@ def gen_ds9_region(cat_csv, fits_img):
             size, clas = int(fds[-2]), int(fds[-1])
             
             ra_core, dec_core, ra_centroid, dec_centroid = fds[1:5]
+            if (ra_core < 0):
+                ra_core += 360.0
             bmaj = float(fds[7])
             bmin = float(fds[8])
             opa = float(fds[9])
-            pa = 360 - opa
+            pa = 180 - opa
+            #TODO use w1, w2 to replace bmaj, bmin
             if (2 == size): 
                 if (clas in [1, 3]): # extended source
-                    pass # don't change anything
+                    # don't change anything
+                    w1 = bmaj
+                    w2 = bmin
                 else:
-                    # assuming core is not fully covered by source
-                    bmaj = bmaj / 2.0 + g / 10.0 
-                    bmin = bmaj #keep it circular Gaussian
+                    # assuming core is fully covered by source
+                    w1 = bmaj / 2.0 #+ g / 10.0 
+                    w2 = w1 #keep it circular Gaussian
             else: # compact source [1 or 3]
                 # 1,2,3 for SS-AGNs, FS-AGNs, SFGs
                 # 1,2,3 for LAS, Gaussian, Exponential
                 if (1 == clas and 1 == size):
-                    bmaj /= 2.0
-                    bmin /= 2.0
+                    w1 = bmaj / 2.0
+                    w2 = bmin / 2.0
                 elif (3 == clas and 3 == size):
-                    bmaj *= cons
-                    bmin *= cons
+                    w1 = bmaj * cons
+                    w2 = bmin * cons
                 else:
                     raise Exception('unknown combination')
             
-            
-            #ellipses.append(e_fmt % (ra_centroid, dec_centroid, bmaj, bmin, pa))
-            ellipses.append(e_fmt % (ra_centroid, dec_centroid, bmin, bmaj, pa))
+            #TODO calculate b1 and b2 from w1 and w2 for gridded sky model
+            b1 = np.sqrt(w1 ** 2 + g2) * (1.5 / (g / 2))
+            b2 = np.sqrt(w2 ** 2 + g2) * (1.5 / (g / 2))
+            ellipses.append(e_fmt % (ra_centroid, dec_centroid, b1 / 2, b2 / 2, pa))
             cores.append(c_fmt % (ra_core, dec_core))
     
     region_fn = cat_csv.replace('.csv', '.reg')
