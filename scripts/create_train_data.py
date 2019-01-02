@@ -45,6 +45,7 @@ def cutout_training_image(cat_csv, field_fits):
     """
     hdulist = pyfits.open(field_fits)
     fhead = hdulist[0].header
+    pixel_res = abs(float(fhead['CDELT1'])) * 3600
     w = pywcs.WCS(fhead)
     xs = []
     ys = []
@@ -55,21 +56,22 @@ def cutout_training_image(cat_csv, field_fits):
             fds = line.split(',')
             ra, dec = fds[3:5]
             ra, dec = float(ra), float(dec)
-            size = float(fds[-5]) / 2.0
+            size = float(fds[-5]) / 2.0 / pixel_res
             x, y = w.wcs_world2pix([[ra, dec, 0, 0]], 0)[0][0:2]
             xs.append(x)
             ys.append(y)
             szs.append(size)
-    mesz = max(szs) / (float(fhead['CDELT1']) * 3600) # deg to arcsec
+    # mesz = max(szs) / (abs(float(fhead['CDELT1'])) * 3600) # deg to arcsec
     # need to add the potential source edge LAS or exponential scale length
     # https://astronomy.swin.edu.au/cosmos/S/Scale+Length
+    mesz = np.mean(szs)
     x1, y1, x2, y2 = int(np.floor(min(xs) - mesz)), int(np.floor(min(ys) - mesz)),\
                      int(np.ceil(max(xs) + mesz)), int(np.ceil(max(ys) + mesz))
     print(x1, y1, x2, y2, mesz)
     out_fname = field_fits.replace('.fits', '_train_image.fits')
     print(splitimg_cmd % (field_fits, out_fname, x1, y1, (x2 - x1), (y2 - y1)))
 
-def gen_ds9_region(cat_csv, fits_img):
+def gen_ds9_region(cat_csv, fits_img, consider_psf=True):
     """
     For B1
     SIZE_CLASS, count
@@ -82,19 +84,21 @@ def gen_ds9_region(cat_csv, fits_img):
     cons = 2 ** 0.5
     hdulist = pyfits.open(fits_img)
     fhead = hdulist[0].header
-    g = 2 * (float(fhead['CDELT1']) * 3600)
+    pixel_res_x = abs(float(fhead['CDELT1']))
+    pixel_res_y = abs(float(fhead['CDELT2']))
+    g = 2 * (pixel_res_x * 3600) # gridding kernel size as per specs
     g2 = g ** 2
-    #TODO add psf factor properly (i.e. read bmaj/bmin from fits header)
+    psf_bmaj_ratio = float(fhead['BMAJ']) / pixel_res_x if consider_psf else 1.0
+    psf_bmin_ratio = float(fhead['BMIN']) / pixel_res_y if consider_psf else 1.0    
     ellipses = []
     cores = []
     e_fmt = 'fk5; ellipse %sd %sd %f" %f" %fd'
     c_fmt = 'fk5; point %sd %sd #point=cross 12'
     with open(cat_csv, 'r') as fin:
         lines = fin.read().splitlines()
-        for line in lines[1:4000]: #skip the header, test the first 200 only
+        for line in lines[1:]: #skip the header, test the first few only
             fds = line.split(',')
             size, clas = int(fds[-2]), int(fds[-1])
-            
             ra_core, dec_core, ra_centroid, dec_centroid = fds[1:5]
             if (ra_core < 0):
                 ra_core += 360.0
@@ -125,8 +129,8 @@ def gen_ds9_region(cat_csv, fits_img):
                     raise Exception('unknown combination')
             
             #TODO calculate b1 and b2 from w1 and w2 for gridded sky model
-            b1 = np.sqrt(w1 ** 2 + g2) * (1.5 / (g / 2))
-            b2 = np.sqrt(w2 ** 2 + g2) * (1.5 / (g / 2))
+            b1 = np.sqrt(w1 ** 2 + g2) * psf_bmaj_ratio
+            b2 = np.sqrt(w2 ** 2 + g2) * psf_bmin_ratio
             ellipses.append(e_fmt % (ra_centroid, dec_centroid, b1 / 2, b2 / 2, pa))
             cores.append(c_fmt % (ra_core, dec_core))
     
