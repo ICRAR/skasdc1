@@ -71,7 +71,7 @@ def cutout_training_image(cat_csv, field_fits):
     out_fname = field_fits.replace('.fits', '_train_image.fits')
     print(splitimg_cmd % (field_fits, out_fname, x1, y1, (x2 - x1), (y2 - y1)))
 
-def gen_ds9_region(cat_csv, fits_img, consider_psf=True):
+def gen_ds9_region(cat_csv, fits_img, consider_psf=False, fancy=True):
     """
     For B1
     SIZE_CLASS, count
@@ -94,45 +94,55 @@ def gen_ds9_region(cat_csv, fits_img, consider_psf=True):
     cores = []
     e_fmt = 'fk5; ellipse %sd %sd %f" %f" %fd'
     c_fmt = 'fk5; point %sd %sd #point=cross 12'
+    flux = []
     with open(cat_csv, 'r') as fin:
         lines = fin.read().splitlines()
         for line in lines[1:]: #skip the header, test the first few only
             fds = line.split(',')
-            size, clas = int(fds[-2]), int(fds[-1])
-            ra_core, dec_core, ra_centroid, dec_centroid = fds[1:5]
+            selected = int(fds[-3])
+            if (0 == selected):
+                continue
+            size, clas = int(fds[-5]), int(fds[-4])
+            pos_list = [float(x) for x in fds[1:5]]
+            ra_core, dec_core, ra_centroid, dec_centroid = pos_list
             if (ra_core < 0):
                 ra_core += 360.0
             bmaj = float(fds[7])
             bmin = float(fds[8])
             opa = float(fds[9])
             pa = 180 - opa
-            #TODO use w1, w2 to replace bmaj, bmin
-            if (2 == size): 
-                if (clas in [1, 3]): # extended source
-                    # don't change anything
-                    w1 = bmaj
-                    w2 = bmin
-                else:
-                    # assuming core is fully covered by source
-                    w1 = bmaj / 2.0 #+ g / 10.0 
-                    w2 = w1 #keep it circular Gaussian
-            else: # compact source [1 or 3]
-                # 1,2,3 for SS-AGNs, FS-AGNs, SFGs
-                # 1,2,3 for LAS, Gaussian, Exponential
-                if (1 == clas and 1 == size):
-                    w1 = bmaj / 2.0
-                    w2 = bmin / 2.0
-                elif (3 == clas and 3 == size):
-                    w1 = bmaj * cons
-                    w2 = bmin * cons
-                else:
-                    raise Exception('unknown combination')
-            
-            #TODO calculate b1 and b2 from w1 and w2 for gridded sky model
-            b1 = np.sqrt(w1 ** 2 + g2) * psf_bmaj_ratio
-            b2 = np.sqrt(w2 ** 2 + g2) * psf_bmin_ratio
+            if (fancy):
+                #TODO use w1, w2 to replace bmaj, bmin
+                if (2 == size): 
+                    if (clas in [1, 3]): # extended source
+                        # don't change anything
+                        w1 = bmaj
+                        w2 = bmin
+                    else:
+                        # assuming core is fully covered by source
+                        w1 = bmaj / 2.0 #+ g / 10.0 
+                        w2 = w1 #keep it circular Gaussian
+                else: # compact source [1 or 3]
+                    # 1,2,3 for SS-AGNs, FS-AGNs, SFGs
+                    # 1,2,3 for LAS, Gaussian, Exponential
+                    if (1 == clas and 1 == size):
+                        w1 = bmaj / 2.0
+                        w2 = bmin / 2.0
+                    elif (3 == clas and 3 == size):
+                        w1 = bmaj * cons
+                        w2 = bmin * cons
+                    else:
+                        raise Exception('unknown combination')
+                
+                #TODO calculate b1 and b2 from w1 and w2 for gridded sky model
+                b1 = np.sqrt(w1 ** 2 + g2) * psf_bmaj_ratio
+                b2 = np.sqrt(w2 ** 2 + g2) * psf_bmin_ratio
+            else:
+                b1 = bmaj
+                b2 = bmin
             ellipses.append(e_fmt % (ra_centroid, dec_centroid, b1 / 2, b2 / 2, pa))
             cores.append(c_fmt % (ra_core, dec_core))
+            flux.append(float(fds[5]))
     
     region_fn = cat_csv.replace('.csv', '.reg')
     with open(region_fn, 'w') as fout:
@@ -141,15 +151,16 @@ def gen_ds9_region(cat_csv, fits_img, consider_psf=True):
             fout.write(os.linesep)
             fout.write(co)
             fout.write(os.linesep)
+    print(np.mean(flux), np.std(flux))
     
 
 if __name__ == '__main__':
     cur_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.join(cur_dir, '..', 'data')
-    train_file = 'TrainingSet_B5.txt'
-    train_csv = 'TrainingSet_B1.csv'
-    whole_field = 'SKAMid_B1_1000h_v2.fits'
-    train_field = 'SKAMid_B1_1000h_v2_train_image.fits'
+    train_file = 'TrainingSet_B1_v2.txt'
+    train_csv = 'TrainingSet_B1_v2.csv'
+    whole_field = 'SKAMid_B1_1000h_v3.fits'
+    train_field = 'SKAMid_B1_1000h_v3_train_image.fits'
     #convert_to_csv(os.path.join(data_dir, train_file))
     #cutout_training_image(osp.join(data_dir, train_csv), osp.join(data_dir, whole_field))
     gen_ds9_region(osp.join(data_dir, train_csv), osp.join(data_dir, train_field))

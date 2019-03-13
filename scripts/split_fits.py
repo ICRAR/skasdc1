@@ -86,6 +86,6 @@ def split_file(fname, width_ratio, height_ratio, halo_ratio=50,
         plt.savefig('test.pdf')
 
 if __name__ == '__main__':
-    fname = 'SKAMid_B1_8h_v2.fits'
-    split_file(fname, 32, 32, show_split_scheme=False, 
-               equal_aspect=True, work_dir='./B1_8h_split')
+    fname = 'SKAMid_B1_1000h_v3.fits'
+    split_file(fname, 16, 16, show_split_scheme=False, 
+               equal_aspect=True, work_dir='./split_B1_1000h')
