@@ -6,6 +6,8 @@ import numpy as np
 import astropy.io.fits as pyfits
 import astropy.wcs as pywcs
 
+import commands # Python 2.7 for convinience
+
 """
 Convert results from ClaRAN output into competition format
 """
@@ -16,13 +18,22 @@ pixel_res_y = 1.67847000000E-04 #abs(float(fhead['CDELT2']))
 g = 2 * (pixel_res_x * 3600) # gridding kernel size as per specs
 g2 = g ** 2
 
+imfit_tpl = 'imfit in=%s "region=boxes(%d, %d, %d, %d)" object=gaussian'
+histo_tpl = 'histo in=%s "region=boxes(%d, %d, %d, %d)"'
+
 def restore_bmaj_bmin(b1, b2, size, clas):
     """
     Restore from image measurements into sky model parameters
     b1, b2 = bmaj, bmin
     """
-    w1 = np.sqrt(b1 ** 2 - g2)
-    w2 = np.sqrt(b2 ** 2 - g2)
+    if (b1 ** 2 > g2):
+        w1 = np.sqrt(b1 ** 2 - g2)
+    else:
+        w1 = b1
+    if (b2 ** 2 > g2):
+        w2 = np.sqrt(b2 ** 2 - g2)
+    else:
+        w2 = b2
 
     if (2 == size): 
         if (clas in [1, 3]): # extended source
@@ -46,13 +57,87 @@ def restore_bmaj_bmin(b1, b2, size, clas):
             raise Exception('unknown combination')
     return bmaj, bmin
 
-def parse_single(result_file, fits_dir, threshold=0.3):
+def _get_integrated_flux(miriad_cmd):
+    status, msg = commands.getstatusoutput(miriad_cmd)
+    if (status == 0):
+        for line in msg.split(os.linesep):
+            if (line.find('Total integrated flux') > -1):
+                fds = line.split()
+                for idx, fd in enumerate(fds):
+                    if (fd == '+/-'):
+                        return float(fds[idx - 1])
+        #print("Can't find integrated flux from %s: %s" % (miriad_cmd, msg))
+        return None
+    else:
+        #print('Fail to execute %s: %d - %s' % (miriad_cmd, status, msg))
+        return None
+
+def _get_integrated_flux_from_histo(miriad_cmd):
+    status, msg = commands.getstatusoutput(miriad_cmd)
+    if (status == 0):
+        for line in msg.split(os.linesep):
+            if (line.find('Flux') > -1):
+                fds = line.split()
+                for idx, fd in enumerate(fds):
+                    if (fd == 'Flux'):
+                        return float(fds[idx + 1])
+        print("Can't find integrated flux from %s: %s" % (miriad_cmd, msg))
+        return None
+    else:
+        print('Fail to execute %s: %d' % (miriad_cmd, status))
+        return None
+
+def _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data):
+    x, y = pb_wcs.wcs_world2pix([[ra, dec, 0, 0]], 0)[0][0:2]
+    #print(pb_data.shape)
+    pbv = pb_data[int(y)][int(x)]
+    #print(x, y, pbv)
+    return total_flux / pbv
+
+def parse_single(result_file, fits_dir, mir_dir, pb, start_id=1, threshold=0.3):
+    """
+    For B1
+    SIZE_CLASS, count
+    1_1,    4034
+    2_1,    380
+    2_2,    3728
+    2_3,    179946
+    3_3,    372
+
+    Q. How is the core position defined?
+    A. For the resolved steep-spectrum AGNs, this is the position of the central spot, where the active nucleus is. 
+    Depending on the morphology of the AGN it could not be very bright and therefore difficult to localise. 
+    For all the other sources this is the position of the peak, which, given the central symmetry, 
+    also coincides with the centroid position.
+
+    core_fract for class 1 - central spot value / total flux
+    core_fract for class 2,3 - peak spot value / total flux
+
+    use miriad histo instead of imfit to get the total flux
+    but if central spot value is negative, then use peak spot value
+
+    Q. How is the size defined? A. it depends on the source population.
+    SS-AGNs (drawn as real AGN images): bmaj is the Largest Angular Size (LAS), 
+        defined as the diameter of the smallest circle that encloses the whole source. 
+        Due to the complex morphology of these sources and the absence of a uniquely defined axis, 
+        bmin and PA are not well defined and will not be scored.  
+    Flat-spectrum AGNs + unresolved sources (draw as elliptical Gaussians): 
+        bmaj/bmin are the fwhm of the two Gaussians along the axes of the ellipse.
+    Resolved SFGs (drawn as elliptical exponentials): 
+        bmaj/bmin are the exponential scale lengths along the axes of the ellipse.
+
+    """
     with open(result_file, 'r') as fin:
         lines = fin.read().splitlines()
     curr_fn = ''
     curr_w = None
     curr_d = None
-    for line in lines:
+    pbhdu = pyfits.open(pb)
+    pbhead = pbhdu[0].header
+    pb_wcs = pywcs.WCS(pbhead)
+    pb_data = pbhdu[0].data[0][0]
+    outlines = ['ID      RA (core)     DEC (core)  RA (centroid) DEC (centroid)           FLUX      Core frac           BMAJ           BMIN             PA      SIZE     CLASS']
+    for idx, line in enumerate(lines):
         fds = line.split(',')
         score = float(fds[2])
         if score < threshold:
@@ -73,10 +158,46 @@ def parse_single(result_file, fits_dir, threshold=0.3):
         cat = fds[1].split('_')
         size = int(cat[0][0])
         clas = int(cat[1][0])
-        centroid = np.array([(x1 + x2) / 2, (h - y1 + h - y2) / 2], dtype=float)
+        centroid = np.array([(x1 + x2) / 2, (h - y1 + h - y2) / 2, 0, 0], dtype=float)
         ra, dec = curr_w.wcs_pix2world([centroid], 0)[0][0:2]
         x1, y1, x2, y2 = [int(x) for x in (x1, y1, x2, y2)]
-        total_flux = np.sum(curr_d[y1:y2][x1:x2])
+        sli = curr_d[(h - y2):min(h - y1 + 1, h), x1:min(x2 + 1, w)]
+        mir_file = osp.join(mir_dir, fn.replace('.fits', '.mir'))
+        miriad_cmd = imfit_tpl % (mir_file, x1, h - y2, x2, h - y1)
+        total_flux = _get_integrated_flux(miriad_cmd)
+        if (total_flux is None):
+            miriad_cmd = histo_tpl % (mir_file, x1, h - y2, x2, h - y1)
+            total_flux = _get_integrated_flux_from_histo(miriad_cmd)
+        if (total_flux is None):
+            total_flux = np.sum(sli)
+        if (clas == 3):
+            core_flux = 0.0
+        else:
+            if (clas == 1):
+                core_flux = curr_d[(h - y1 + h - y2) // 2][(x1 + x2) // 2]
+            else:
+                ind = np.unravel_index(np.argmax(sli, axis=None), sli.shape)
+                core_flux = sli[ind]
+        core_frac = core_flux / total_flux
+        total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
         bmaj, bmin = restore_bmaj_bmin(b1, b2, size, clas)
         pa = 90 if box_w > box_h else 0
+        out_line = [start_id, ra, dec, ra, dec, total_flux, core_frac, bmaj, bmin, pa, size, clas]
+        out_line = [str(x) for x in out_line]
+        out_line = '     '.join(out_line)
+        start_id += 1
+        outlines.append(out_line)
+        if (idx % 1000 == 0):
+            print('Done %d' % (idx + 1))
+    
+    with open('icrar_560MHz_1000h_v3_st_%d.txt' % start_id, 'w') as fout:
+        fc = os.linesep.join(outlines)
+        fout.write(fc)
+
+if __name__ == '__main__':
+    result_file = '19327573.result'
+    fits_dir = 'split_B1_1000h_test'
+    mir_dir = 'split_B1_1000h_test_mir'
+    pb = 'PrimaryBeam_B1.fits'
+    parse_single(result_file, fits_dir, mir_dir, pb, start_id=0, threshold=0.0)
 
