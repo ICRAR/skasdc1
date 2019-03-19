@@ -57,20 +57,37 @@ def restore_bmaj_bmin(b1, b2, size, clas):
             raise Exception('unknown combination')
     return bmaj, bmin
 
-def _get_integrated_flux(miriad_cmd):
+def _derive_flux_from_msg(msg):
+    for line in msg.split(os.linesep):
+        if (line.find('Total integrated flux') > -1):
+            fds = line.split()
+            """
+            for idx, fd in enumerate(fds):
+                if (fd == '+/-'):
+                    print(idx - 1)
+                    return float(fds[idx - 1])
+            """
+            return float(fds[3])
+    return None
+
+incr = 2
+
+def _get_integrated_flux(mir_file, x1, y1, x2, y2, h, w, error_codes):
+    miriad_cmd = imfit_tpl % (mir_file, x1, y1, x2, y2)
     status, msg = commands.getstatusoutput(miriad_cmd)
     if (status == 0):
-        for line in msg.split(os.linesep):
-            if (line.find('Total integrated flux') > -1):
-                fds = line.split()
-                for idx, fd in enumerate(fds):
-                    if (fd == '+/-'):
-                        return float(fds[idx - 1])
         #print("Can't find integrated flux from %s: %s" % (miriad_cmd, msg))
-        return None
+        return _derive_flux_from_msg(msg)
     else:
-        #print('Fail to execute %s: %d - %s' % (miriad_cmd, status, msg))
-        return None
+        if (len(error_codes) > 10):
+            return None
+        else:
+            error_codes.append(status)
+            x1 = max(0, x1 - incr)
+            x2 = min(w - 1, x2 + incr)
+            y1 = max(0, y1 - incr)
+            y2 = min(h - 1, y2 + incr)
+            return _get_integrated_flux(mir_file, x1, y1, x2, y2, h, w, error_codes)
 
 def _get_integrated_flux_from_histo(miriad_cmd):
     status, msg = commands.getstatusoutput(miriad_cmd)
@@ -78,9 +95,13 @@ def _get_integrated_flux_from_histo(miriad_cmd):
         for line in msg.split(os.linesep):
             if (line.find('Flux') > -1):
                 fds = line.split()
+                """
                 for idx, fd in enumerate(fds):
                     if (fd == 'Flux'):
+                        print(idx + 1)
                         return float(fds[idx + 1])
+                """
+                return float(fds[5])
         print("Can't find integrated flux from %s: %s" % (miriad_cmd, msg))
         return None
     else:
@@ -163,32 +184,43 @@ def parse_single(result_file, fits_dir, mir_dir, pb, start_id=1, threshold=0.3):
         x1, y1, x2, y2 = [int(x) for x in (x1, y1, x2, y2)]
         sli = curr_d[(h - y2):min(h - y1 + 1, h), x1:min(x2 + 1, w)]
         mir_file = osp.join(mir_dir, fn.replace('.fits', '.mir'))
-        miriad_cmd = imfit_tpl % (mir_file, x1, h - y2, x2, h - y1)
-        total_flux = _get_integrated_flux(miriad_cmd)
-        if (total_flux is None):
+        
+        #source_of_flux = 'imfit'
+        failed_attempts = []
+        total_flux = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, failed_attempts)
+        if (total_flux is None or np.isnan(total_flux)):
+            #source_of_flux = 'histo'
             miriad_cmd = histo_tpl % (mir_file, x1, h - y2, x2, h - y1)
             total_flux = _get_integrated_flux_from_histo(miriad_cmd)
-        if (total_flux is None):
-            total_flux = np.sum(sli)
+            if (total_flux is None or np.isnan(total_flux)):
+                #source_of_flux = 'np.sum'
+                total_flux = np.sum(sli)
+        if (total_flux < 0):
+            continue # ignore this source
         if (clas == 3):
             core_flux = 0.0
         else:
             if (clas == 1):
                 core_flux = curr_d[(h - y1 + h - y2) // 2][(x1 + x2) // 2]
             else:
-                ind = np.unravel_index(np.argmax(sli, axis=None), sli.shape)
-                core_flux = sli[ind]
+                #ind = np.unravel_index(np.argmax(sli, axis=None), sli.shape)
+                #core_flux = sli[ind]
+                core_flux = np.max(sli)
+        core_flux = max(0.0, core_flux)
         core_frac = core_flux / total_flux
+        #origin_flux = total_flux
         total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
         bmaj, bmin = restore_bmaj_bmin(b1, b2, size, clas)
         pa = 90 if box_w > box_h else 0
-        out_line = [start_id, ra, dec, ra, dec, total_flux, core_frac, bmaj, bmin, pa, size, clas]
+        out_line = [start_id, ra, dec, ra, dec, total_flux, core_frac, bmaj, bmin, pa, size, clas]#, origin_flux, core_flux, source_of_flux]
         out_line = [str(x) for x in out_line]
         out_line = '     '.join(out_line)
         start_id += 1
         outlines.append(out_line)
         if (idx % 1000 == 0):
             print('Done %d' % (idx + 1))
+        # if (idx == 2000):
+        #     break
     
     with open('icrar_560MHz_1000h_v3_st_%d.txt' % start_id, 'w') as fout:
         fc = os.linesep.join(outlines)
