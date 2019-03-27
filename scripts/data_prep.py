@@ -7,13 +7,28 @@ import numpy as np
 import cv2
 import json
 
-from collections import defaultdict
+import os.path as osp
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+from collections import defaultdict, namedtuple
+
+from astropy.io import fits
+from scipy.special import erfinv
+mad2sigma = np.sqrt(2) * erfinv(2 * 0.75 - 1)
+
 
 cons = 2 ** 0.5
 pixel_res_x = 1.67847000000E-04 #abs(float(fhead['CDELT1']))
 pixel_res_y = 1.67847000000E-04 #abs(float(fhead['CDELT2']))
 g = 2 * (pixel_res_x * 3600) # gridding kernel size as per specs
 g2 = g ** 2
+BMAJ = 4.16666676756E-04
+BMIN = 4.16666676756E-04
+psf_bmaj_ratio = BMAJ / pixel_res_x
+psf_bmin_ratio = BMIN / pixel_res_y
+NUM_SIGMA = 1
 
 flux_mean, flux_std = 3.995465965009945e-06, 0.00012644451470476082
 
@@ -28,6 +43,8 @@ SIZE_CLASS, count
 """
 
 CAT_XML_COCO_DICT = {'1_1': 1, '2_1': 2, '2_2': 3, '2_3': 4, '3_3': 5}
+
+GTSource = namedtuple('GTSource', 'box clas size')
 
 def _get_fits_mbr(fin, row_ignore_factor=10):
     hdulist = pyfits.open(fin)
@@ -121,63 +138,94 @@ def derive_pos_from_cat(line, fancy):
                 raise Exception('unknown combination')
         
         #TODO calculate b1 and b2 from w1 and w2 for gridded sky model
-        b1 = np.sqrt(w1 ** 2 + g2)
-        b2 = np.sqrt(w2 ** 2 + g2)
+        b1 = np.sqrt(w1 ** 2 + g2) * psf_bmaj_ratio
+        b2 = np.sqrt(w2 ** 2 + g2) * psf_bmin_ratio
     else:
         b1 = bmaj
         b2 = bmin
     combo = '%s_%s' % (fds[10], fds[11])
     return [float(fds[3]), float(fds[4]), b1, b2, float(fds[9]), combo]
 
-def _gen_single_bbox(fits_fn, ra, dec, major, minor, pa, major_scale=1.0):
+half_pi = np.pi / 2
+def _get_bbox_from_ellipse(phi, r1, r2, cx, cy, h, w):
+    """
+    https://stackoverflow.com/questions/87734/
+    how-do-you-calculate-the-axis-aligned-bounding-box-of-an-ellipse
+
+    angle in degrees
+    r1, r2 in number of pixels (half major/minor)
+    cx and cy is pixel coordinated
+    """
+    ux = r1 * np.cos(phi)
+    uy = r1 * np.sin(phi)
+    vx = r2 * np.cos(phi + half_pi)
+    vy = r2 * np.sin(phi + half_pi)
+
+    hw = np.sqrt(ux * ux + vx * vx)
+    hh = np.sqrt(uy * uy + vy * vy)
+    x1, y1, x2, y2 = cx - hw, cy - hh, cx + hw, cy + hh
+    return (x1, y1, x2, y2)
+
+fits_fn_dict = dict()
+def _gen_single_bbox(fits_fn, ra, dec, major, minor, pa, for_png=False):
     """
     Form the bbox BEFORE converting wcs to the pixel coordinates
     major and mior are in arcsec
     """
     ra = float(ra)
     dec = float(dec)
+    #print(ra, dec)
+    if (fits_fn not in fits_fn_dict):
+        hdulist = pyfits.open(fits_fn)
+        height, width = hdulist[0].data.shape[0:2]
+        w = pywcs.WCS(hdulist[0].header).deepcopy()
+        fits_fn_dict[fits_fn] = (w, height, width)
+    else:
+        w, height, width = fits_fn_dict[fits_fn]
 
-    hdulist = pyfits.open(fits_fn)
-    height, width = hdulist[0].data.shape[0:2]
-    w = pywcs.WCS(hdulist[0].header)
     cx, cy = w.wcs_world2pix([[ra, dec, 0, 0]], 0)[0][0:2]
+    #cx = np.ceil(cx)
+    if (not for_png):
+        cx += 1
+    #cy = np.ceil(cy)
+    cy += 1
     if (cx < 0 or cx > width):
+        #print('got it cx {0}, {1}'.format(cx, fits_fn))
         return []
     if (cy < 0 or cy > height):
+        #print('got it cy {0}'.format(cy))
         return []
-    #cx, cy = w.wcs_world2pix(ra, dec, 0)
-    cy = height - cy
-    ang = major * major_scale / 3600.0 / 2 #actually semi-major
-    res_x = pixel_res_x #abs(hdulist[0].header['CDELT1'])
-    angp = ang / res_x
+    if (for_png):
+        cy = height - cy
+    majorp = major / 3600.0 / pixel_res_x / 2 #actually semi-major 
+    minorp = minor / 3600.0 / pixel_res_x / 2
     paa = np.radians(pa)
-    angpx = angp * abs(np.sin(paa))
-    angpy = angp * abs(np.cos(paa))
-    #print('\n---- %s' % fits_fn)
-    #print(ang, angp, cx, cy, ra, dec)
-    xmin = cx - angpx
-    ymin = cy - angpy
-    xmax = cx + angpx
-    ymax = cy + angpy
-    
+    x1, y1, x2, y2 = _get_bbox_from_ellipse(paa, majorp, minorp, cx, cy, height, width)
+    # return x1, y1, x2, y2, height, width
+    origin_area = (y2 - y1) * (x2 - x1)
+
     # crop it around the border
-    xp_min = max(xmin, 0)
-    yp_min = max(ymin, 0)
-    xp_max = min(xmax, width - 1)
+    xp_min = max(x1, 0)
+    yp_min = max(y1, 0)
+    xp_max = min(x2, width - 1)
     if (xp_max <= xp_min):
         return []
-    yp_max = min(ymax, height - 1)
+    yp_max = min(y2, height - 1)
     if (yp_max <= yp_min):
         return []
-    #print(xp_min, yp_min, xp_max, yp_max, height, width)
-    return (xp_min, yp_min, xp_max, yp_max, height, width)
+    new_area = (yp_max - yp_min) * (xp_max - xp_min)
+
+    if (origin_area / new_area > 2):
+        print('cropped box is too small, discarding...')
+        return []
+    return (xp_min, yp_min, xp_max, yp_max, height, width, cx, cy)
 
 def fits2png(fits_dir, png_dir):
     """
     Convert fits to png files based on the D1 method
     """
     cmd_tpl = '%s -cmap Heat'\
-        ' -zoom to fit -scale squared -scale mode zscale -export %s -exit'
+        ' -zoom to fit -scale asinh -scale mode minmax -export %s -exit'
     # cmd_tpl = '%s -cmap gist_heat -cmap value 0.684039 0'\
     #     ' -zoom to fit -scale log -scale mode minmax -export %s -exit'
     from sh import Command
@@ -189,9 +237,155 @@ def fits2png(fits_dir, png_dir):
         if (fits.endswith('.fits')):
             png = fits.replace('.fits', '.png')
             cmd = cmd_tpl % (osp.join(fits_dir, fits), osp.join(png_dir, png))
+            #print(cmd)
             ds9(*(cmd.split()))
 
-def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, fancy=True):
+def _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data):
+    x, y = pb_wcs.wcs_world2pix([[ra, dec, 0, 0]], 0)[0][0:2]
+    #print(pb_data.shape)
+    pbv = pb_data[int(y)][int(x)]
+    #print(x, y, pbv)
+    return total_flux / pbv
+
+def region_sources(el_dict, box_dict, region_dir):
+    for k, v in el_dict.items():
+        box_list = box_dict[k]
+        #print(len(box_list), len(v))
+        k = k.replace('.fits', '.reg')
+        region_fn = osp.join(region_dir, k)
+        with open(region_fn, 'w') as fout:
+            for el, bbox in zip(v, box_list):
+                fout.write(el)
+                fout.write(os.linesep)
+                fout.write(bbox)
+                fout.write(os.linesep)
+
+def draw_sources(claran_result, png_dir, target_dir):
+    for k, v in claran_result.items():
+        k = k.replace('.fits', '.png')
+        png_fn = osp.join(png_dir, k)
+        im = cv2.imread(png_fn)
+        h, w, _ = im.shape
+        my_dpi = 96
+        fig = plt.figure(figsize=(h / my_dpi, w / my_dpi), dpi=my_dpi)
+        #fig.set_size_inches(h / my_dpi, w / my_dpi)
+        ax = plt.Axes(fig, [0., 0., 1., 1.])
+        ax.set_axis_off()
+        fig.add_axes(ax)
+        ax.set_xlim([0, w])
+        ax.set_ylim([h, 0])
+        im = im[:, :, (2, 1, 0)]
+        ax.imshow(im, aspect='equal')
+
+        for cs in v:
+            bbox = cs.box
+            ax.add_patch(
+            plt.Rectangle((bbox[0], bbox[1]),
+                          bbox[2] - bbox[0],
+                          bbox[3] - bbox[1], fill=False,
+                          edgecolor='white', linewidth=0.2)
+            )
+            # ax.text(bbox[0], bbox[1] - 2,
+            #     '{0}C_{1}S'.format(cs.clas, cs.size),
+            #     bbox=dict(facecolor='None', alpha=1.0, edgecolor='None'),
+            #     fontsize=10, color='white')
+        
+        plt.axis('off')
+        plt.draw()
+        out_fn = osp.join(target_dir, k.replace('.png', '_pred.png'))
+        plt.savefig(out_fn, dpi=my_dpi * 2)
+        plt.close()
+
+def obtain_sigma(fits_fn):
+    with fits.open(fits_fn) as f:
+        imgdata = f[0].data
+    med = np.nanmedian(imgdata)
+    mad = np.nanmedian(np.abs(imgdata - med))
+    sigma = mad / mad2sigma
+    return sigma, med
+
+
+def draw_gt(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_dir, fancy=True):
+    ret_dict = defaultdict(list)
+    elip_dict = defaultdict(list)
+    box_dict = defaultdict(list)
+    #core_dict = defaultdict(list)
+
+    e_fmt = 'fk5; ellipse %sd %sd %f" %f" %fd'
+    c_fmt = 'fk5; point %sd %sd #point=cross 12'
+    b_fmt = 'fk5; box %fd %fd %dp %dp 0'
+    bp_fmt = 'physical; box %fp %fp %dp %dp 0'
+
+    pbhdu = pyfits.open(pb)
+    pbhead = pbhdu[0].header
+    pb_wcs = pywcs.WCS(pbhead)
+    pb_data = pbhdu[0].data[0][0]
+
+    g_db_pool = _setup_db_pool()
+    conn = g_db_pool.getconn()
+
+    sigma_dict = dict()
+
+    with open(cat_csv, 'r') as fin:
+        lines = fin.read().splitlines()
+
+    for idx, line in enumerate(lines[1:]): #skip the header, test the first few only
+        # if (idx == 15000):
+        #     break
+        if (idx % 1000 == 0):
+            print("scanned %d" % idx)
+        ret = derive_pos_from_cat(line, fancy)
+        #print(ret)
+        if len(ret) == 0:
+            continue
+        ra, dec, major, minor, pa, combo = ret
+        lll = line.split(',')
+        size, clas = int(lll[-5]), int(lll[-4])
+        area_pixel = ((major / 3600 / pixel_res_x) * (minor / 3600 / pixel_res_x)) / 1.1
+        total_flux = float(lll[5]) / area_pixel
+        total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
+
+        sqlStr = "select fileid from %s where coverage ~ scircle " % table_name +\
+                    "'<(%fd, %fd), %fd>'" % (ra, dec, max(pixel_res_x, pixel_res_y))
+        cur = conn.cursor()
+        cur.execute(sqlStr)
+        res = cur.fetchall()
+        if (not res or len(res) == 0):
+            #print("Fail to find fits for source {0}".format(source_id))
+            continue
+        
+        for fd in res:
+            fid = fd[0]
+            fits_img = osp.join(split_fits_dir, fid)
+            if (fid not in sigma_dict):
+                sigma, med = obtain_sigma(fits_img)
+                clip_level = med + NUM_SIGMA * sigma
+                sigma_dict[fid] = clip_level
+            else:
+                clip_level = sigma_dict[fid]
+            if (total_flux) < clip_level:
+                continue
+            
+            rrr = _gen_single_bbox(fits_img, ra, dec, major, minor, pa, for_png=True)
+            if (len(rrr) == 0):
+               continue
+            x1, y1, x2, y2, h, w, cx, cy = rrr
+            gs = GTSource(box=(x1, y1, x2, y2), clas=clas, size=size)
+            ret_dict[fid].append(gs)
+            box_dict[fid].append(bp_fmt % (cx, cy, int(x2 - x1), int(y2 - y1)))
+            #box_dict[fid].append(b_fmt % (ra, dec, int(x2 - x1 + 1), int(y2 - y1 + 1)))
+            elip_dict[fid].append(e_fmt % (ra, dec, major / 2, minor / 2, 180 - pa))
+        
+    draw_sources(ret_dict, split_png_dir, target_dir)
+    print(len(elip_dict), len(box_dict))
+    #region_sources(elip_dict, box_dict, target_dir.replace('png_gt', 'regions'))
+
+def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, pb, fancy=True):
+    pbhdu = pyfits.open(pb)
+    pbhead = pbhdu[0].header
+    pb_wcs = pywcs.WCS(pbhead)
+    pb_data = pbhdu[0].data[0][0]
+
     images = []
     annolist = []
     g_db_pool = _setup_db_pool()
@@ -200,7 +394,11 @@ def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, fancy=True)
     fid_dict = dict() #mapping from fits file id to json file id
     #TODO go thrugh split png dir, and build its json id, save that to dict
     for idx, png_fn in enumerate(os.listdir(split_png_dir)):
+        if (not png_fn.endswith('.png')):
+            continue
         im = cv2.imread(osp.join(split_png_dir, png_fn))
+        if (im is None):
+            raise Exception(osp.join(split_png_dir, png_fn))
         h, w = im.shape[0:2]
         img_d = {'id': idx, 'license': 1, 'file_name': '%s.png' % png_fn, 'height':h, 'width': w}
         fid_dict[png_fn] = idx
@@ -215,6 +413,7 @@ def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, fancy=True)
             if len(ret) == 0:
                 continue
             ra, dec, major, minor, pa, combo = ret
+            total_flux = float(lll[5]) / (major, minor)
 
             sqlStr = "select fileid from %s where coverage ~ scircle " % table_name +\
                     "'<(%fd, %fd), %fd>'" % (ra, dec, max(pixel_res_x, pixel_res_y))
@@ -223,32 +422,38 @@ def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, fancy=True)
             cur.execute(sqlStr)
             res = cur.fetchall()
             if (not res or len(res) == 0):
-                print("Fail to find fits for source %d".format(source_id))
+                #print("Fail to find fits for source {0}".format(source_id))
                 continue
             for fd in res:
                 fid = fd[0]
+                png_fid = fid.replace('.fits', '.png')
+                if (png_fid not in fid_dict):
+                    # corresponding image is not in the training/testing set.
+                    #print("Image not in the current set for source {0}".format(source_id))
+                    continue
                 fits_img = osp.join(split_fits_dir, fid)
                 rrr = _gen_single_bbox(fits_img, ra, dec, major, minor, pa)
                 if (len(rrr) == 0):
                     continue
-                x1, y1, x2, y2, h, w = rrr
+                x1, y1, x2, y2, h, w, cx, cy = rrr
                 anno = dict()
                 valid_source_cc += 1
                 anno['category_id'] = CAT_XML_COCO_DICT[combo]
                 bw = x2 - x1
                 bh = y2 - y1
-                anno['bbox'] = [x1, y1, bw, bh]
-                anno['area'] = bh * bw
+                anno['bbox'] = [int(x) for x in [x1, y1, bw, bh]]
+                anno['area'] = int(bh * bw)
                 anno['id'] = valid_source_cc#source_id
                 anno['source_id'] = source_id
                 anno['flux'] = (float(lll[5]) - flux_mean) / flux_std
-                anno['image_id'] = fid_dict[fid.replace('.fits', '.png')]
+                anno['image_id'] = fid_dict[png_fid]
                 anno['iscrowd'] = 0
                 annolist.append(anno)
                 #print(anno)
-            if (idx % 100 == 0):
-                print('Done %d' % idx)
-                #return None, None
+            if (idx % 500 == 0):
+                print('Scanned %d' % idx)
+                #quick test
+                #return images, annolist
     
     return images, annolist
 
@@ -257,8 +462,8 @@ def create_coco_anno():
     anno['info'] = {"description": "RGZ data release 1", "year": 2018}
     anno['licenses'] = [{"url": r"http://creativecommons.org/licenses/by-nc-sa/2.0/", 
                          "id": 1, "name": "Attribution-NonCommercial-ShareAlike License"}]
-    anno['images'] = []
-    anno['annotations'] = []
+    #anno['images'] = []
+    #anno['annotations'] = []
     anno['categories'] = create_categories()
     return anno
 
@@ -276,9 +481,8 @@ def create_categories():
     catlist.append({"supercategory": "galaxy", "id": 1, "name": "1S_1C"})
     catlist.append({"supercategory": "galaxy", "id": 2, "name": "2S_1C"})
     catlist.append({"supercategory": "galaxy", "id": 3, "name": "2S_2C"})
-    catlist.append({"supercategory": "galaxy", "id": 4, "name": "3S_3C"})
+    catlist.append({"supercategory": "galaxy", "id": 4, "name": "2S_3C"})
     catlist.append({"supercategory": "galaxy", "id": 5, "name": "3S_3C"})
-   
     return catlist
 
 if __name__ == '__main__':
@@ -289,9 +493,14 @@ if __name__ == '__main__':
     fits_cutout_dir = osp.join(data_dir, 'split_B1_1000h')
     #build_fits_cutout_index(fits_cutout_dir, tablename)
     png_dir = osp.join(data_dir, 'split_B1_1000h_png')
+    tgt_png_dir = osp.join(data_dir, 'split_B1_1000h_png_gt')
+    #png_dir = osp.join(data_dir, 'split_B1_1000h_png_val')
     #fits2png(fits_cutout_dir, png_dir)
-    images, annolist = prepare_json(train_csv, fits_cutout_dir, png_dir, tablename)
-    anno = create_coco_anno()
-    anno['images'].extend(images)
-    with open(osp.join(data_dir, 'train_B1_1000h.json')):
-        pass
+    pb = osp.join(data_dir, 'PrimaryBeam_B1.fits')
+    draw_gt(train_csv, fits_cutout_dir, png_dir, tablename, pb, tgt_png_dir, fancy=True)
+    # images, annolist = prepare_json(train_csv, fits_cutout_dir, png_dir, tablename, pb)
+    # anno = create_coco_anno()
+    # anno['images'] = images
+    # anno['annotations'] = annolist
+    # with open(osp.join(data_dir, 'val_B1_1000h.json'), 'w') as fout:
+    #     json.dump(anno, fout)
