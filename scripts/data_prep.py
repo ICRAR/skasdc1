@@ -67,6 +67,11 @@ def _get_fits_mbr(fin, row_ignore_factor=10):
     ret[2, :] = pix2sky(top_right)
     ret[3, :] = pix2sky(bottom_right)
     RA_min, DEC_min, RA_max, DEC_max = np.min(ret[:, 0]),   np.min(ret[:, 1]),  np.max(ret[:, 0]),  np.max(ret[:, 1])
+
+    if (width * abs(float(hdulist[0].header['CDELT1'])) * 2 < (RA_max - RA_min)):
+        #print(fin, width * abs(float(hdulist[0].header['CDELT1'])), (RA_max - RA_min))
+        RA_max, RA_min = RA_min, RA_max
+        #print(fin)
     
     # http://pgsphere.projects.pgfoundry.org/types.html
     sqlStr = "SELECT sbox '((%10fd, %10fd), (%10fd, %10fd))'" % (RA_min, DEC_min, RA_max, DEC_max)
@@ -99,7 +104,7 @@ def build_fits_cutout_index(fits_cutout_dir,
         coverage = res[0][0]
         sqlStr = """INSERT INTO {0}(coverage,fileid) VALUES('{1}','{2}')"""
         sqlStr = sqlStr.format(tablename, coverage, fn)
-        print(sqlStr)
+        #print(sqlStr)
         cur.execute(sqlStr)
         conn.commit()
     g_db_pool.putconn(conn)
@@ -190,10 +195,10 @@ def _gen_single_bbox(fits_fn, ra, dec, major, minor, pa, for_png=False):
     #cy = np.ceil(cy)
     cy += 1
     if (cx < 0 or cx > width):
-        #print('got it cx {0}, {1}'.format(cx, fits_fn))
+        print('got it cx {0}, {1}'.format(cx, fits_fn))
         return []
     if (cy < 0 or cy > height):
-        #print('got it cy {0}'.format(cy))
+        print('got it cy {0}'.format(cy))
         return []
     if (for_png):
         cy = height - cy
