@@ -396,6 +396,8 @@ def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, pb, fancy=T
     g_db_pool = _setup_db_pool()
     conn = g_db_pool.getconn()
 
+    sigma_dict = dict()
+
     fid_dict = dict() #mapping from fits file id to json file id
     #TODO go thrugh split png dir, and build its json id, save that to dict
     for idx, png_fn in enumerate(os.listdir(split_png_dir)):
@@ -411,54 +413,66 @@ def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, pb, fancy=T
     valid_source_cc = 0
     with open(cat_csv, 'r') as fin:
         lines = fin.read().splitlines()
-        for idx, line in enumerate(lines[1:]): #skip the header, test the first few only
-            ret = derive_pos_from_cat(line, fancy)
-            lll = line.split(',')
-            source_id = int(lll[0])
-            if len(ret) == 0:
-                continue
-            ra, dec, major, minor, pa, combo = ret
-            total_flux = float(lll[5]) / (major, minor)
+    for idx, line in enumerate(lines[1:]): #skip the header, test the first few only
+        if (idx % 1000 == 0):
+            print("scanned %d" % idx)
+        ret = derive_pos_from_cat(line, fancy)           
+        if len(ret) == 0:
+            continue
+        lll = line.split(',')
+        source_id = int(lll[0])
+        ra, dec, major, minor, pa, combo = ret
+        
+        area_pixel = ((major / 3600 / pixel_res_x) * (minor / 3600 / pixel_res_x)) / 1.1
+        total_flux = float(lll[5]) / area_pixel
+        total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
 
-            sqlStr = "select fileid from %s where coverage ~ scircle " % table_name +\
-                    "'<(%fd, %fd), %fd>'" % (ra, dec, max(pixel_res_x, pixel_res_y))
-            cur = conn.cursor(sqlStr)
-            cur = conn.cursor()
-            cur.execute(sqlStr)
-            res = cur.fetchall()
-            if (not res or len(res) == 0):
-                #print("Fail to find fits for source {0}".format(source_id))
+        sqlStr = "select fileid from %s where coverage ~ scircle " % table_name +\
+                "'<(%fd, %fd), %fd>'" % (ra, dec, max(pixel_res_x, pixel_res_y))
+        cur = conn.cursor()
+        cur.execute(sqlStr)
+        res = cur.fetchall()
+        if (not res or len(res) == 0):
+            #print("Fail to find fits for source {0}".format(source_id))
+            continue
+        for fd in res:
+            fid = fd[0]
+            fits_img = osp.join(split_fits_dir, fid)
+            if (fid not in sigma_dict):
+                sigma, med = obtain_sigma(fits_img)
+                clip_level = med + NUM_SIGMA * sigma
+                sigma_dict[fid] = clip_level
+            else:
+                clip_level = sigma_dict[fid]
+            if (total_flux) < clip_level:
                 continue
-            for fd in res:
-                fid = fd[0]
-                png_fid = fid.replace('.fits', '.png')
-                if (png_fid not in fid_dict):
-                    # corresponding image is not in the training/testing set.
-                    #print("Image not in the current set for source {0}".format(source_id))
-                    continue
-                fits_img = osp.join(split_fits_dir, fid)
-                rrr = _gen_single_bbox(fits_img, ra, dec, major, minor, pa)
-                if (len(rrr) == 0):
-                    continue
-                x1, y1, x2, y2, h, w, cx, cy = rrr
-                anno = dict()
-                valid_source_cc += 1
-                anno['category_id'] = CAT_XML_COCO_DICT[combo]
-                bw = x2 - x1
-                bh = y2 - y1
-                anno['bbox'] = [int(x) for x in [x1, y1, bw, bh]]
-                anno['area'] = int(bh * bw)
-                anno['id'] = valid_source_cc#source_id
-                anno['source_id'] = source_id
-                anno['flux'] = (float(lll[5]) - flux_mean) / flux_std
-                anno['image_id'] = fid_dict[png_fid]
-                anno['iscrowd'] = 0
-                annolist.append(anno)
-                #print(anno)
-            if (idx % 500 == 0):
-                print('Scanned %d' % idx)
-                #quick test
-                #return images, annolist
+            #print(fid)
+            png_fid = fid.replace('.fits', '.png')
+            if (png_fid not in fid_dict):
+                # corresponding image is not in the training/testing set.
+                # print("Image {1} not in the current set for source {0}".format(source_id, png_fid))
+                continue
+            
+            rrr = _gen_single_bbox(fits_img, ra, dec, major, minor, pa, for_png=True)
+            if (len(rrr) == 0):
+                continue
+            x1, y1, x2, y2, h, w, cx, cy = rrr
+            anno = dict()
+            valid_source_cc += 1
+            #anno['category_id'] = CAT_XML_COCO_DICT[combo]
+            anno['category_id'] = int(combo.split('_')[1])
+            bw = x2 - x1
+            bh = y2 - y1
+            anno['bbox'] = [int(x) for x in [x1, y1, bw, bh]]
+            anno['area'] = int(bh * bw)
+            anno['id'] = valid_source_cc#source_id
+            anno['source_id'] = source_id
+            #anno['flux'] = (float(lll[5]) - flux_mean) / flux_std
+            anno['image_id'] = fid_dict[png_fid]
+            anno['iscrowd'] = 0
+            annolist.append(anno)
+            #print(anno)
+    print('%d valid sources on %d images' % (valid_source_cc, len(fid_dict)))
     
     return images, annolist
 
@@ -483,11 +497,11 @@ def create_categories():
     3_3,    372
     """
     catlist = []
-    catlist.append({"supercategory": "galaxy", "id": 1, "name": "1S_1C"})
-    catlist.append({"supercategory": "galaxy", "id": 2, "name": "2S_1C"})
-    catlist.append({"supercategory": "galaxy", "id": 3, "name": "2S_2C"})
-    catlist.append({"supercategory": "galaxy", "id": 4, "name": "2S_3C"})
-    catlist.append({"supercategory": "galaxy", "id": 5, "name": "3S_3C"})
+    catlist.append({"supercategory": "galaxy", "id": 1, "name": "1"})
+    catlist.append({"supercategory": "galaxy", "id": 2, "name": "2"})
+    catlist.append({"supercategory": "galaxy", "id": 3, "name": "3"})
+    #catlist.append({"supercategory": "galaxy", "id": 4, "name": "2S_3C"})
+    #catlist.append({"supercategory": "galaxy", "id": 5, "name": "3S_3C"})
     return catlist
 
 if __name__ == '__main__':
@@ -497,15 +511,15 @@ if __name__ == '__main__':
     tablename = 'b1_1000h_train'
     fits_cutout_dir = osp.join(data_dir, 'split_B1_1000h')
     #build_fits_cutout_index(fits_cutout_dir, tablename)
-    png_dir = osp.join(data_dir, 'split_B1_1000h_png')
+    png_dir = osp.join(data_dir, 'split_B1_1000h_png_val')
     tgt_png_dir = osp.join(data_dir, 'split_B1_1000h_png_gt')
     #png_dir = osp.join(data_dir, 'split_B1_1000h_png_val')
     #fits2png(fits_cutout_dir, png_dir)
     pb = osp.join(data_dir, 'PrimaryBeam_B1.fits')
-    draw_gt(train_csv, fits_cutout_dir, png_dir, tablename, pb, tgt_png_dir, fancy=True)
-    # images, annolist = prepare_json(train_csv, fits_cutout_dir, png_dir, tablename, pb)
-    # anno = create_coco_anno()
-    # anno['images'] = images
-    # anno['annotations'] = annolist
-    # with open(osp.join(data_dir, 'val_B1_1000h.json'), 'w') as fout:
-    #     json.dump(anno, fout)
+    #draw_gt(train_csv, fits_cutout_dir, png_dir, tablename, pb, tgt_png_dir, fancy=True)
+    images, annolist = prepare_json(train_csv, fits_cutout_dir, png_dir, tablename, pb)
+    anno = create_coco_anno()
+    anno['images'] = images
+    anno['annotations'] = annolist
+    with open(osp.join(data_dir, 'instances_val_B1_1000h.json'), 'w') as fout:
+        json.dump(anno, fout)
