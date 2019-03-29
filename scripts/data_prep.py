@@ -28,7 +28,12 @@ BMAJ = 4.16666676756E-04
 BMIN = 4.16666676756E-04
 psf_bmaj_ratio = BMAJ / pixel_res_x
 psf_bmin_ratio = BMIN / pixel_res_y
+synth_beam_size = psf_bmaj_ratio * psf_bmin_ratio
 NUM_SIGMA = 1
+
+b1_sigma = 3.5789029744176247e-07
+b1_median = -2.9249549e-08
+b1_three_sigma = -2.9249549e-08 + 3 * b1_sigma
 
 flux_mean, flux_std = 3.995465965009945e-06, 0.00012644451470476082
 
@@ -252,6 +257,11 @@ def _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data):
     #print(x, y, pbv)
     return total_flux / pbv
 
+def _apply_primary_beam(model_flux, ra, dec, pb_wcs, pb_data):
+    x, y = pb_wcs.wcs_world2pix([[ra, dec, 0, 0]], 0)[0][0:2]
+    pbv = pb_data[int(y)][int(x)]
+    return model_flux * pbv
+
 def region_sources(el_dict, box_dict, region_dir):
     for k, v in el_dict.items():
         box_list = box_dict[k]
@@ -307,7 +317,7 @@ def obtain_sigma(fits_fn):
     med = np.nanmedian(imgdata)
     mad = np.nanmedian(np.abs(imgdata - med))
     sigma = mad / mad2sigma
-    return sigma, med
+    return sigma, med, imgdata
 
 
 def draw_gt(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_dir, fancy=True):
@@ -321,11 +331,7 @@ def draw_gt(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_dir, 
     b_fmt = 'fk5; box %fd %fd %dp %dp 0'
     bp_fmt = 'physical; box %fp %fp %dp %dp 0'
 
-    pbhdu = pyfits.open(pb)
-    pbhead = pbhdu[0].header
-    pb_wcs = pywcs.WCS(pbhead)
-    pb_data = pbhdu[0].data[0][0]
-
+    pb_wcs, pb_data = _setup_pb(pb)
     g_db_pool = _setup_db_pool()
     conn = g_db_pool.getconn()
 
@@ -363,7 +369,7 @@ def draw_gt(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_dir, 
             fid = fd[0]
             fits_img = osp.join(split_fits_dir, fid)
             if (fid not in sigma_dict):
-                sigma, med = obtain_sigma(fits_img)
+                sigma, med, _ = obtain_sigma(fits_img)
                 clip_level = med + NUM_SIGMA * sigma
                 sigma_dict[fid] = clip_level
             else:
@@ -386,10 +392,7 @@ def draw_gt(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_dir, 
     #region_sources(elip_dict, box_dict, target_dir.replace('png_gt', 'regions'))
 
 def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, pb, fancy=True):
-    pbhdu = pyfits.open(pb)
-    pbhead = pbhdu[0].header
-    pb_wcs = pywcs.WCS(pbhead)
-    pb_data = pbhdu[0].data[0][0]
+    pb_wcs, pb_data = _setup_pb(pb)
 
     images = []
     annolist = []
@@ -407,7 +410,7 @@ def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, pb, fancy=T
         if (im is None):
             raise Exception(osp.join(split_png_dir, png_fn))
         h, w = im.shape[0:2]
-        img_d = {'id': idx, 'license': 1, 'file_name': '%s.png' % png_fn, 'height':h, 'width': w}
+        img_d = {'id': idx, 'license': 1, 'file_name': '%s' % png_fn, 'height':h, 'width': w}
         fid_dict[png_fn] = idx
         images.append(img_d)
     valid_source_cc = 0
@@ -422,16 +425,8 @@ def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, pb, fancy=T
         lll = line.split(',')
         source_id = int(lll[0])
         ra, dec, major, minor, pa, combo = ret
-        
-        area_pixel = ((major / 3600 / pixel_res_x) * (minor / 3600 / pixel_res_x)) / 1.1
-        total_flux = float(lll[5]) / area_pixel
-        total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
-
-        sqlStr = "select fileid from %s where coverage ~ scircle " % table_name +\
-                "'<(%fd, %fd), %fd>'" % (ra, dec, max(pixel_res_x, pixel_res_y))
-        cur = conn.cursor()
-        cur.execute(sqlStr)
-        res = cur.fetchall()
+        avg_image_flux = _calc_image_flux(float(lll[5]), major, minor, ra, dec, pb_wcs, pb_data)
+        res = _find_fid_from_db(conn, ra, dec, table_name)
         if (not res or len(res) == 0):
             #print("Fail to find fits for source {0}".format(source_id))
             continue
@@ -439,12 +434,12 @@ def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, pb, fancy=T
             fid = fd[0]
             fits_img = osp.join(split_fits_dir, fid)
             if (fid not in sigma_dict):
-                sigma, med = obtain_sigma(fits_img)
+                sigma, med, _ = obtain_sigma(fits_img)
                 clip_level = med + NUM_SIGMA * sigma
                 sigma_dict[fid] = clip_level
             else:
                 clip_level = sigma_dict[fid]
-            if (total_flux) < clip_level:
+            if (avg_image_flux) < clip_level:
                 continue
             #print(fid)
             png_fid = fid.replace('.fits', '.png')
@@ -475,6 +470,91 @@ def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, pb, fancy=T
     print('%d valid sources on %d images' % (valid_source_cc, len(fid_dict)))
     
     return images, annolist
+
+def _setup_pb(pb_fn):
+    pbhdu = pyfits.open(pb_fn)
+    pbhead = pbhdu[0].header
+    pb_wcs = pywcs.WCS(pbhead)
+    pb_data = pbhdu[0].data[0][0]
+    return pb_wcs, pb_data
+
+def _calc_image_flux(model_flux, major, minor, ra, dec, pb_wcs, pb_data):
+    area_pixel = ((major / 3600 / pixel_res_x) * (minor / 3600 / pixel_res_x)) / 1.1
+    model_flux /= area_pixel
+    return _apply_primary_beam(model_flux, ra, dec, pb_wcs, pb_data)
+
+def _find_fid_from_db(conn, ra, dec, table_name):
+    sqlStr = "select fileid from %s where coverage ~ scircle " % table_name +\
+                "'<(%fd, %fd), %fd>'" % (ra, dec, max(pixel_res_x, pixel_res_y))
+    cur = conn.cursor()
+    cur.execute(sqlStr)
+    res = cur.fetchall()
+    return res
+
+def verify_flux(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_fn, fancy=True):
+    pb_wcs, pb_data = _setup_pb(pb)
+    g_db_pool = _setup_db_pool()
+    conn = g_db_pool.getconn()
+    sigma_dict = dict()
+    entries = []
+    source_entries = []
+    with open(cat_csv, 'r') as fin:
+        lines = fin.read().splitlines()
+    for idx, line in enumerate(lines[1:]): #skip the header, test the first few only
+        if (idx % 1000 == 0):
+            print("scanned %d" % idx)
+        ret = derive_pos_from_cat(line, fancy)           
+        if len(ret) == 0:
+            continue
+        lll = line.split(',')
+        source_id = int(lll[0])
+        model_flux = float(lll[5])
+        ra, dec, major, minor, pa, combo = ret
+        avg_image_flux = _calc_image_flux(model_flux, major, minor, ra, dec, pb_wcs, pb_data)
+        res = _find_fid_from_db(conn, ra, dec, table_name)
+        if (not res or len(res) == 0):
+            print("Fail to find fits for source {0}".format(source_id))
+            continue
+        for fd in res:
+            fid = fd[0]
+            fits_img = osp.join(split_fits_dir, fid)
+            if (fid not in sigma_dict):
+                sigma, med, curr_d = obtain_sigma(fits_img)
+                clip_level = med + NUM_SIGMA * sigma
+                sigma_dict[fid] = clip_level
+            else:
+                clip_level = sigma_dict[fid]
+            if avg_image_flux < clip_level:
+                continue
+            rrr = _gen_single_bbox(fits_img, ra, dec, major, minor, pa, for_png=True)
+            if (len(rrr) == 0):
+                print('fail to produce valid box for %s at %f, %f' % (fits_img, ra, dec))
+                continue
+            x1, y1, x2, y2, h, w, cx, cy = rrr
+            x1, y1, x2, y2 = [int(x) for x in (x1, y1, x2, y2)]
+            # since for_png was set to true, the coordinates are based on PNG 
+            # just to simulate ClaRAN outout. This means we need to get the inverse for y
+            # in the numpy array converted from FITS file
+            sli = curr_d[(h - y2):min(h - y1 + 1, h), x1:min(x2 + 1, w)]
+            #sli = curr_d[y1:min(y2 + 1, h), x1:min(x2 + 1, w)]
+            sli = sli[np.where(sli > 0)]
+            int_flux01 = np.sum(sli)
+            int_flux02 = int_flux01 / synth_beam_size
+
+            #_get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, failed_attempts)
+            source_entry = '%s,%d,%d,%d,%d,%d,%d,%d' % (fid, source_id, x1, h - y2, x2, h - y1, h, w)
+            source_entries.append(source_entry)
+            entry = '%d,%f,%f,%f' % (source_id, 
+                                        model_flux, 
+                                        int_flux01, int_flux02)
+            entries.append(entry)
+
+    
+    with open(target_fn, 'w') as fout:
+        fout.write(os.linesep.join(entries))
+    
+    with open('source_entry.csv', 'w') as fout:
+        fout.write(os.linesep.join(source_entries))
 
 def create_coco_anno():
     anno = dict()
@@ -511,15 +591,17 @@ if __name__ == '__main__':
     tablename = 'b1_1000h_train'
     fits_cutout_dir = osp.join(data_dir, 'split_B1_1000h')
     #build_fits_cutout_index(fits_cutout_dir, tablename)
-    png_dir = osp.join(data_dir, 'split_B1_1000h_png_val')
+    png_dir = osp.join(data_dir, 'split_B1_1000h_png_train')
     tgt_png_dir = osp.join(data_dir, 'split_B1_1000h_png_gt')
     #png_dir = osp.join(data_dir, 'split_B1_1000h_png_val')
     #fits2png(fits_cutout_dir, png_dir)
     pb = osp.join(data_dir, 'PrimaryBeam_B1.fits')
     #draw_gt(train_csv, fits_cutout_dir, png_dir, tablename, pb, tgt_png_dir, fancy=True)
-    images, annolist = prepare_json(train_csv, fits_cutout_dir, png_dir, tablename, pb)
-    anno = create_coco_anno()
-    anno['images'] = images
-    anno['annotations'] = annolist
-    with open(osp.join(data_dir, 'instances_val_B1_1000h.json'), 'w') as fout:
-        json.dump(anno, fout)
+    # images, annolist = prepare_json(train_csv, fits_cutout_dir, png_dir, tablename, pb)
+    # anno = create_coco_anno()
+    # anno['images'] = images
+    # anno['annotations'] = annolist
+    # with open(osp.join(data_dir, 'instances_train_B1_1000h.json'), 'w') as fout:
+    #     json.dump(anno, fout)
+    output_fn = osp.join(data_dir, 'flux_compare')
+    verify_flux(train_csv, fits_cutout_dir, png_dir, tablename, pb, output_fn)

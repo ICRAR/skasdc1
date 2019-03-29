@@ -6,6 +6,10 @@ import numpy as np
 import astropy.io.fits as pyfits
 import astropy.wcs as pywcs
 
+from astropy.io import fits
+from scipy.special import erfinv
+mad2sigma = np.sqrt(2) * erfinv(2 * 0.75 - 1)
+
 import commands # Python 2.7 for convinience
 
 """
@@ -17,9 +21,25 @@ pixel_res_x = 1.67847000000E-04 #abs(float(fhead['CDELT1']))
 pixel_res_y = 1.67847000000E-04 #abs(float(fhead['CDELT2']))
 g = 2 * (pixel_res_x * 3600) # gridding kernel size as per specs
 g2 = g ** 2
+BMAJ = 4.16666676756E-04
+BMIN = 4.16666676756E-04
+psf_bmaj_ratio = BMAJ / pixel_res_x
+psf_bmin_ratio = BMIN / pixel_res_y
 
 imfit_tpl = 'imfit in=%s "region=boxes(%d, %d, %d, %d)" object=gaussian'
 histo_tpl = 'histo in=%s "region=boxes(%d, %d, %d, %d)"'
+
+b1_sigma = 3.5789029744176247e-07
+b1_median = -2.9249549e-08
+b1_three_sigma = -2.9249549e-08 + 3 * b1_sigma
+
+def obtain_sigma(fits_fn):
+    with fits.open(fits_fn) as f:
+        imgdata = f[0].data
+    med = np.nanmedian(imgdata)
+    mad = np.nanmedian(np.abs(imgdata - med))
+    sigma = mad / mad2sigma
+    return sigma, med
 
 def restore_bmaj_bmin(b1, b2, size, clas):
     """
@@ -177,32 +197,35 @@ def parse_single(result_file, fits_dir, mir_dir, pb, start_id=1, threshold=0.3):
         b1 = np.sqrt(box_h ** 2 + box_w ** 2)
         b2 = min(box_h, box_w)
         cat = fds[1].split('_')
-        size = int(cat[0][0])
-        clas = int(cat[1][0])
+        size = int(cat[1][0])
+        clas = int(cat[0][0])
+        #clas = 4 - clas
         centroid = np.array([(x1 + x2) / 2, (h - y1 + h - y2) / 2, 0, 0], dtype=float)
         ra, dec = curr_w.wcs_pix2world([centroid], 0)[0][0:2]
         x1, y1, x2, y2 = [int(x) for x in (x1, y1, x2, y2)]
         sli = curr_d[(h - y2):min(h - y1 + 1, h), x1:min(x2 + 1, w)]
-        mir_file = osp.join(mir_dir, fn.replace('.fits', '.mir'))
-        
+        #mir_file = osp.join(mir_dir, fn.replace('.fits', '.mir'))
+        sli = sli[np.where(sli >= b1_three_sigma)]
+        total_flux = np.sum(sli)
         #source_of_flux = 'imfit'
-        failed_attempts = []
-        total_flux = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, failed_attempts)
-        if (total_flux is None or np.isnan(total_flux)):
-            #source_of_flux = 'histo'
-            miriad_cmd = histo_tpl % (mir_file, x1, h - y2, x2, h - y1)
-            total_flux = _get_integrated_flux_from_histo(miriad_cmd)
-            if (total_flux is None or np.isnan(total_flux)):
-                #source_of_flux = 'np.sum'
-                total_flux = np.sum(sli)
-        if (total_flux < 0):
+        # failed_attempts = []
+        # total_flux = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, failed_attempts)
+        # if (total_flux is None or np.isnan(total_flux)):
+        #     #source_of_flux = 'histo'
+        #     miriad_cmd = histo_tpl % (mir_file, x1, h - y2, x2, h - y1)
+        #     total_flux = _get_integrated_flux_from_histo(miriad_cmd)
+        #     if (total_flux is None or np.isnan(total_flux)):
+        #         #source_of_flux = 'np.sum'
+        #         total_flux = np.sum(sli)
+        if (total_flux <= 0):
+            print('still non-positive integrated flux at %s' % fn)
             continue # ignore this source
-        if (clas == 3):
+        if (clas == 3): # 1 component
             core_flux = 0.0
         else:
-            if (clas == 1):
+            if (clas == 1): # 3 component
                 core_flux = curr_d[(h - y1 + h - y2) // 2][(x1 + x2) // 2]
-            else:
+            else: # 2 component
                 #ind = np.unravel_index(np.argmax(sli, axis=None), sli.shape)
                 #core_flux = sli[ind]
                 core_flux = np.max(sli)
@@ -210,8 +233,10 @@ def parse_single(result_file, fits_dir, mir_dir, pb, start_id=1, threshold=0.3):
         core_frac = core_flux / total_flux
         #origin_flux = total_flux
         total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
-        bmaj, bmin = restore_bmaj_bmin(b1, b2, size, clas)
+        #bmaj, bmin = restore_bmaj_bmin(b1, b2, size, clas)
+        bmaj, bmin = max(b1, b2), min(b1, b2)
         pa = 90 if box_w > box_h else 0
+        
         out_line = [start_id, ra, dec, ra, dec, total_flux, core_frac, bmaj, bmin, pa, size, clas]#, origin_flux, core_flux, source_of_flux]
         out_line = [str(x) for x in out_line]
         out_line = '     '.join(out_line)
@@ -227,9 +252,9 @@ def parse_single(result_file, fits_dir, mir_dir, pb, start_id=1, threshold=0.3):
         fout.write(fc)
 
 if __name__ == '__main__':
-    result_file = '19327573.result'
+    result_file = '20593462.result'
     fits_dir = 'split_B1_1000h_test'
     mir_dir = 'split_B1_1000h_test_mir'
     pb = 'PrimaryBeam_B1.fits'
-    parse_single(result_file, fits_dir, mir_dir, pb, start_id=0, threshold=0.0)
+    parse_single(result_file, fits_dir, mir_dir, pb, start_id=0, threshold=0.16)
 

@@ -73,6 +73,7 @@ def split_file(fname, width_ratio, height_ratio, halo_ratio=50,
             y1 -= max(0, y2_c - (h - 1))
             fid = osp.basename(fname).replace('.fits', '%d-%d.fits' % (i, j))
             out_fname = osp.join(work_dir, fid)
+            #print(out_fname)
             print(splitimg_cmd % (fname, out_fname, x1, y1, (x2 - x1), (y2 - y1)))
             if (show_split_scheme):
                 rect = patches.Rectangle((x1, y1), (x2 - x1), (y2 - y1),
@@ -87,5 +88,8 @@ def split_file(fname, width_ratio, height_ratio, halo_ratio=50,
 
 if __name__ == '__main__':
     fname = 'SKAMid_B1_1000h_v3.fits'
-    split_file(fname, 16, 16, show_split_scheme=False, 
-               equal_aspect=True, work_dir='./split_B1_1000h')
+    fname = 'VLACOSMOS_1400MHz.fits'
+    workdir = './split_B1_1000h'
+    workdir = './split_1400mhz'
+    split_file(fname, 20, 20, show_split_scheme=False, 
+               equal_aspect=True, work_dir=workdir, halo_ratio=20)

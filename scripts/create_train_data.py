@@ -15,6 +15,16 @@ splitimg_cmd = '{0} -p %s %s %d %d %d %d'.format(subimg_exec)
 
 SDC1_HOME = '/Users/chen/gitrepos/ml/skasdc1'
 
+# these are for all map
+b1_sigma = 3.5789029744176247e-07 
+b1_median = -2.9249549e-08 
+
+# these are for training map only
+#b1_sigma = 3.8185009938219004e-07 #
+#b1_median = -1.9233363e-07 #
+
+b1_three_sigma = b1_median + 1 * b1_sigma
+
 def convert_to_csv(fname):
     csv_list = []
     with open(fname, 'r') as fin:
@@ -71,7 +81,14 @@ def cutout_training_image(cat_csv, field_fits):
     out_fname = field_fits.replace('.fits', '_train_image.fits')
     print(splitimg_cmd % (field_fits, out_fname, x1, y1, (x2 - x1), (y2 - y1)))
 
-def gen_ds9_region(cat_csv, fits_img, consider_psf=False, fancy=True):
+def _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data):
+    x, y = pb_wcs.wcs_world2pix([[ra, dec, 0, 0]], 0)[0][0:2]
+    #print(pb_data.shape)
+    pbv = pb_data[int(y)][int(x)]
+    #print(x, y, pbv)
+    return total_flux / pbv
+
+def gen_ds9_region(cat_csv, fits_img, pb, consider_psf=True, fancy=True):
     """
     For B1
     SIZE_CLASS, count
@@ -81,6 +98,11 @@ def gen_ds9_region(cat_csv, fits_img, consider_psf=False, fancy=True):
     2_3,    179946
     3_3,    372
     """
+    pbhdu = pyfits.open(pb)
+    pbhead = pbhdu[0].header
+    pb_wcs = pywcs.WCS(pbhead)
+    pb_data = pbhdu[0].data[0][0]
+
     cons = 2 ** 0.5
     hdulist = pyfits.open(fits_img)
     fhead = hdulist[0].header
@@ -95,6 +117,8 @@ def gen_ds9_region(cat_csv, fits_img, consider_psf=False, fancy=True):
     e_fmt = 'fk5; ellipse %sd %sd %f" %f" %fd'
     c_fmt = 'fk5; point %sd %sd #point=cross 12'
     flux = []
+    faint = 0
+    tt_selected = 0
     with open(cat_csv, 'r') as fin:
         lines = fin.read().splitlines()
         for line in lines[1:]: #skip the header, test the first few only
@@ -102,6 +126,7 @@ def gen_ds9_region(cat_csv, fits_img, consider_psf=False, fancy=True):
             selected = int(fds[-3])
             if (0 == selected):
                 continue
+            tt_selected += 1
             size, clas = int(fds[-5]), int(fds[-4])
             pos_list = [float(x) for x in fds[1:5]]
             ra_core, dec_core, ra_centroid, dec_centroid = pos_list
@@ -140,11 +165,19 @@ def gen_ds9_region(cat_csv, fits_img, consider_psf=False, fancy=True):
             else:
                 b1 = bmaj
                 b2 = bmin
+            area_pixel = ((b1 / 3600 / pixel_res_x) * (b2 / 3600 / pixel_res_x)) / 1.1
+            #area_pixel = (b1 * b2)
+            #print(b1, b2, area_pixel)
+            total_flux = float(fds[5]) / area_pixel
+            total_flux = _primary_beam_correction(total_flux, ra_centroid, dec_centroid, pb_wcs, pb_data)
+            if (total_flux < b1_three_sigma):
+                faint += 1
+                continue
             ellipses.append(e_fmt % (ra_centroid, dec_centroid, b1 / 2, b2 / 2, pa))
             cores.append(c_fmt % (ra_core, dec_core))
             flux.append(float(fds[5]))
     
-    region_fn = cat_csv.replace('.csv', '.reg')
+    region_fn = cat_csv.replace('.csv', '_1sigma_global.reg')
     with open(region_fn, 'w') as fout:
         for el, co in zip(ellipses, cores):
             fout.write(el)
@@ -152,6 +185,7 @@ def gen_ds9_region(cat_csv, fits_img, consider_psf=False, fancy=True):
             fout.write(co)
             fout.write(os.linesep)
     print(np.mean(flux), np.std(flux))
+    print('total selected sources %d, faint source %d' % (tt_selected, faint))
     
 
 if __name__ == '__main__':
@@ -163,4 +197,5 @@ if __name__ == '__main__':
     train_field = 'SKAMid_B1_1000h_v3_train_image.fits'
     #convert_to_csv(os.path.join(data_dir, train_file))
     #cutout_training_image(osp.join(data_dir, train_csv), osp.join(data_dir, whole_field))
-    gen_ds9_region(osp.join(data_dir, train_csv), osp.join(data_dir, train_field))
+    pb = 'PrimaryBeam_B1.fits'
+    gen_ds9_region(osp.join(data_dir, train_csv), osp.join(data_dir, train_field), osp.join(data_dir, pb))
