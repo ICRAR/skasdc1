@@ -6,7 +6,7 @@ import os
 from astropy.io import fits
 from scipy.special import erfinv
 mad2sigma = np.sqrt(2) * erfinv(2 * 0.75 - 1)
-NUM_SIGMA = 1
+NUM_SIGMA = 3
 
 def obtain_sigma(fits_fn):
     with fits.open(fits_fn) as f:

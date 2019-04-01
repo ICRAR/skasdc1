@@ -480,8 +480,8 @@ def _setup_pb(pb_fn):
 
 def _calc_image_flux(model_flux, major, minor, ra, dec, pb_wcs, pb_data):
     area_pixel = ((major / 3600 / pixel_res_x) * (minor / 3600 / pixel_res_x)) / 1.1
-    model_flux /= area_pixel
-    return _apply_primary_beam(model_flux, ra, dec, pb_wcs, pb_data)
+    return model_flux / area_pixel
+    #return _apply_primary_beam(model_flux, ra, dec, pb_wcs, pb_data)
 
 def _find_fid_from_db(conn, ra, dec, table_name):
     sqlStr = "select fileid from %s where coverage ~ scircle " % table_name +\
@@ -591,7 +591,7 @@ if __name__ == '__main__':
     tablename = 'b1_1000h_train'
     fits_cutout_dir = osp.join(data_dir, 'split_B1_1000h')
     #build_fits_cutout_index(fits_cutout_dir, tablename)
-    png_dir = osp.join(data_dir, 'split_B1_1000h_png_train')
+    png_dir = osp.join(data_dir, 'split_B1_1000h_png_val')
     tgt_png_dir = osp.join(data_dir, 'split_B1_1000h_png_gt')
     #png_dir = osp.join(data_dir, 'split_B1_1000h_png_val')
     #fits2png(fits_cutout_dir, png_dir)
@@ -601,7 +601,7 @@ if __name__ == '__main__':
     # anno = create_coco_anno()
     # anno['images'] = images
     # anno['annotations'] = annolist
-    # with open(osp.join(data_dir, 'instances_train_B1_1000h.json'), 'w') as fout:
+    # with open(osp.join(data_dir, 'instances_val_B1_1000h.json'), 'w') as fout:
     #     json.dump(anno, fout)
     output_fn = osp.join(data_dir, 'flux_compare')
     verify_flux(train_csv, fits_cutout_dir, png_dir, tablename, pb, output_fn)
