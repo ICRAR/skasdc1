@@ -26,6 +26,7 @@ BMAJ = 4.16666676756E-04
 BMIN = 4.16666676756E-04
 psf_bmaj_ratio = BMAJ / pixel_res_x
 psf_bmin_ratio = BMIN / pixel_res_y
+synth_beam_size = psf_bmaj_ratio * psf_bmin_ratio
 
 imfit_tpl = 'imfit in=%s "region=boxes(%d, %d, %d, %d)" object=gaussian'
 histo_tpl = 'histo in=%s "region=boxes(%d, %d, %d, %d)"'
@@ -91,7 +92,7 @@ def _derive_flux_from_msg(msg):
             return float(fds[3])
     return None
 
-incr = 2
+incr = 1
 
 def _get_integrated_flux(mir_file, x1, y1, x2, y2, h, w, error_codes):
     miriad_cmd = imfit_tpl % (mir_file, x1, y1, x2, y2)
@@ -100,9 +101,10 @@ def _get_integrated_flux(mir_file, x1, y1, x2, y2, h, w, error_codes):
         #print("Can't find integrated flux from %s: %s" % (miriad_cmd, msg))
         return _derive_flux_from_msg(msg)
     else:
-        if (len(error_codes) > 10):
+        if (len(error_codes) > 3):
             return None
         else:
+            print(miriad_cmd)
             error_codes.append(status)
             x1 = max(0, x1 - incr)
             x2 = min(w - 1, x2 + incr)
@@ -218,6 +220,7 @@ def parse_single(result_file, fits_dir, mir_dir, start_id=1, threshold=0.8):
     curr_fn = ''
     curr_w = None
     curr_d = None
+    img_dict = dict()
     clas_size_dict = {1:1, 2:2, 3:2}
     outlines = ['ID      RA (core)     DEC (core)  RA (centroid) DEC (centroid)           FLUX      Core frac           BMAJ           BMIN             PA      SIZE     CLASS']
     for idx, line in enumerate(lines):
@@ -235,27 +238,28 @@ def parse_single(result_file, fits_dir, mir_dir, start_id=1, threshold=0.8):
             hdulist = pyfits.open(fpath)
             fhead = hdulist[0].header
             curr_w = pywcs.WCS(fhead)
-            curr_d = hdulist[0].data
-            h, w = curr_d.shape[0:2]
+            curr_d = hdulist[0].data[0][0]
+            h, w = curr_d.shape
+            print(h, w)
         x1, y1, x2, y2 = [float(x) for x in fds[3].split('-')]
         box_h, box_w = y2 - y1 + 1, x2 - x1 + 1
         b1 = np.sqrt(box_h ** 2 + box_w ** 2)
         b2 = min(box_h, box_w)
         clas = int(fds[1])#.split('_')
         size = clas_size_dict[clas]
-        #size = int(cat[1][0])
-        #clas = int(cat[0][0])
-        #clas = 4 - clas
-        centroid = np.array([(x1 + x2) / 2, (h - y1 + h - y2) / 2, 0, 0], dtype=float)
+        cx = (x1 + x2) / 2 + 1
+        cy = (y1 + y2) / 2 + 1
+        #print(cy, img_h)
+        cy = h - cy
+        centroid = np.array([cx, cy, 0, 0], dtype=float)
         ra, dec = curr_w.wcs_pix2world([centroid], 0)[0][0:2]
         x1, y1, x2, y2 = [int(x) for x in (x1, y1, x2, y2)]
-        sli = curr_d[(h - y2):min(h - y1 + 1, h), x1:min(x2 + 1, w)]
-        #mir_file = osp.join(mir_dir, fn.replace('.fits', '.mir'))
-        sli = sli[np.where(sli >= b1_three_sigma)]
-        total_flux = np.sum(sli)
+        
         #source_of_flux = 'imfit'
-        # failed_attempts = []
-        # total_flux = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, failed_attempts)
+        failed_attempts = []
+        mir_file = osp.join(mir_dir, fn.replace('.fits', '.mir'))
+        total_flux = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, failed_attempts)
+        print(total_flux)
         # if (total_flux is None or np.isnan(total_flux)):
         #     #source_of_flux = 'histo'
         #     miriad_cmd = histo_tpl % (mir_file, x1, h - y2, x2, h - y1)
@@ -264,8 +268,13 @@ def parse_single(result_file, fits_dir, mir_dir, start_id=1, threshold=0.8):
         #         #source_of_flux = 'np.sum'
         #         total_flux = np.sum(sli)
         if (total_flux <= 0):
-            print('still non-positive integrated flux at %s' % fn)
-            continue # ignore this source
+            print('Failed miriad - ', failed_attempts)
+            sli = curr_d[(h - y2):min(h - y1 + 1, h), x1:min(x2 + 1, w)]
+            sli = sli[np.where(sli >= 0)]
+            total_flux = np.sum(sli) / synth_beam_size
+            if (total_flux <= 0):
+                print('still non-positive integrated flux at %s' % fn)
+                continue # ignore this source
         if (clas == 3): # 1 component
             core_flux = 0.0
         else:
@@ -297,6 +306,6 @@ if __name__ == '__main__':
     result_file = '21592081.result'
     fits_dir = 'split_B1_1000h_test_pbcorrected'
     mir_dir = 'split_B1_1000h_test_pbcorrected_mir'
-    #parse_single(result_file, fits_dir, mir_dir, start_id=0, threshold=0.8)
-    visual_result(result_file, fits_dir, 'reg_out')
+    parse_single(result_file, fits_dir, mir_dir, start_id=0, threshold=0.8)
+    #visual_result(result_file, fits_dir, 'reg_out')
 
