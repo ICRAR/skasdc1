@@ -12,7 +12,9 @@ produce DS9 region files and flux for evaluation
 """
 
 bp_fmt = 'physical; box %fp %fp %dp %dp 0 # color=white'
-cls_fmt = 'physical; text %fp %fp {%d}'
+cls_fmt = 'physical; text %fp %fp {%d} # color=white'
+
+show_class = True
 
 def parse_val_images(fn):
     ret = dict()
@@ -24,6 +26,7 @@ def parse_val_images(fn):
 
 def parse_val_result(fn, img_dict, threshold=0.8):
     box_dict = defaultdict(list)
+    text_dict = defaultdict(list)
     with open(fn, 'r') as fin:
         jo = json.load(fin) 
     for det in jo:
@@ -36,7 +39,12 @@ def parse_val_result(fn, img_dict, threshold=0.8):
         cy = (y1 + y1 + bh) / 2 + 1
         cy = img_h - cy
         box_dict[img_fn].append(bp_fmt % (cx, cy, bw + 1, bh + 1))
-    return box_dict
+        if (show_class):
+            cls_lbl = det['category_id']
+            if (cls_lbl != 3):
+                print(cls_fmt % (x1 + 1, cy + (bh + 1) / 2, cls_lbl))
+            text_dict[img_fn].append(cls_fmt % (x1 + 1, cy + (bh + 1) / 2, cls_lbl))
+    return box_dict, text_dict
 
 if __name__ == '__main__':
     cur_dir = osp.dirname(osp.abspath(__file__))
@@ -44,16 +52,19 @@ if __name__ == '__main__':
     #png_dir = osp.join(data_dir, 'split_B1_1000h_png_val')
     eval_dir = osp.join(data_dir, 'evaluate')
     img_json = osp.join(eval_dir, 'instances_val_B1_1000h.json')
-    val_json = osp.join(eval_dir, 'val_B1_1000h_more-outputs75000.json')
+    val_json = osp.join(eval_dir, 'val_B1_1000h_more-outputs100000.json')
     out_dir = val_json.replace('.json', '')
     if (not osp.exists(out_dir)):
         os.mkdir(out_dir)
 
-    box_dict = parse_val_result(val_json, parse_val_images(img_json))
+    box_dict, text_dict = parse_val_result(val_json, parse_val_images(img_json))
     for k, v in box_dict.items():
         out_fn = osp.join(out_dir, k.replace('.png', '.reg'))
         with open(out_fn, 'w') as fout:
             fout.write(os.linesep.join(v))
+            if (show_class):
+                fout.write(os.linesep)
+                fout.write(os.linesep.join(text_dict[k]))
 
 
 

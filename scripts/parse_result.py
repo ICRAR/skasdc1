@@ -11,6 +11,7 @@ from scipy.special import erfinv
 mad2sigma = np.sqrt(2) * erfinv(2 * 0.75 - 1)
 
 import commands # Python 2.7 for convinience
+from collections import defaultdict
 
 """
 Convert results from ClaRAN output into competition format
@@ -135,7 +136,50 @@ def _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data):
     #print(x, y, pbv)
     return total_flux / pbv
 
-def parse_single(result_file, fits_dir, mir_dir, pb, start_id=1, threshold=0.3):
+def visual_result(result_file, fits_dir, out_dir, threshold=0.8, show_class=True):
+    img_dict = dict()
+    box_dict = defaultdict(list)
+    text_dict = defaultdict(list)
+    bp_fmt = 'physical; box %fp %fp %dp %dp 0 # color=white'
+    cls_fmt = 'physical; text %fp %fp {%d} # color=white'
+    with open(result_file, 'r') as fin:
+        lines = fin.read().splitlines()
+    for idx, line in enumerate(lines):
+        if (idx % 1000 == 0):
+            print('Done %d' % (idx + 1))
+
+        fds = line.split(',')
+        score = float(fds[2])
+        if score < threshold:
+            continue
+        fn = fds[0].replace('.png', '.fits')
+        if (fn not in img_dict):
+            hdulist = pyfits.open(osp.join(fits_dir, fn))
+            #print(hdulist[0].data.shape)
+            img_h, w = hdulist[0].data.shape[2:]
+            img_dict[fn] = (img_h, w)
+        else:
+            img_h, w = img_dict[fn]
+        x1, y1, x2, y2 = [float(x) for x in fds[3].split('-')]
+        bh, bw = y2 - y1 + 1, x2 - x1 + 1
+        cx = (x1 + x2) / 2 + 1
+        cy = (y1 + y2) / 2 + 1
+        #print(cy, img_h)
+        cy = img_h - cy
+        box_dict[fn].append(bp_fmt % (cx, cy, bw + 1, bh + 1))
+        if (show_class):
+            cls_lbl = int(fds[1])
+            text_dict[fn].append(cls_fmt % (x1 + 1, cy + (bh + 1) / 2, cls_lbl))
+        
+    for k, v in box_dict.items():
+        out_fn = osp.join(out_dir, k.replace('.fits', '.reg'))
+        with open(out_fn, 'w') as fout:
+            fout.write(os.linesep.join(v))
+            if (show_class):
+                fout.write(os.linesep)
+                fout.write(os.linesep.join(text_dict[k]))
+
+def parse_single(result_file, fits_dir, mir_dir, start_id=1, threshold=0.8):
     """
     For B1
     SIZE_CLASS, count
@@ -168,17 +212,18 @@ def parse_single(result_file, fits_dir, mir_dir, pb, start_id=1, threshold=0.3):
         bmaj/bmin are the exponential scale lengths along the axes of the ellipse.
 
     """
+
     with open(result_file, 'r') as fin:
         lines = fin.read().splitlines()
     curr_fn = ''
     curr_w = None
     curr_d = None
-    pbhdu = pyfits.open(pb)
-    pbhead = pbhdu[0].header
-    pb_wcs = pywcs.WCS(pbhead)
-    pb_data = pbhdu[0].data[0][0]
+    clas_size_dict = {1:1, 2:2, 3:2}
     outlines = ['ID      RA (core)     DEC (core)  RA (centroid) DEC (centroid)           FLUX      Core frac           BMAJ           BMIN             PA      SIZE     CLASS']
     for idx, line in enumerate(lines):
+        if (idx % 1000 == 0):
+            print('Done %d' % (idx + 1))
+
         fds = line.split(',')
         score = float(fds[2])
         if score < threshold:
@@ -196,9 +241,10 @@ def parse_single(result_file, fits_dir, mir_dir, pb, start_id=1, threshold=0.3):
         box_h, box_w = y2 - y1 + 1, x2 - x1 + 1
         b1 = np.sqrt(box_h ** 2 + box_w ** 2)
         b2 = min(box_h, box_w)
-        cat = fds[1].split('_')
-        size = int(cat[1][0])
-        clas = int(cat[0][0])
+        clas = int(fds[1])#.split('_')
+        size = clas_size_dict[clas]
+        #size = int(cat[1][0])
+        #clas = int(cat[0][0])
         #clas = 4 - clas
         centroid = np.array([(x1 + x2) / 2, (h - y1 + h - y2) / 2, 0, 0], dtype=float)
         ra, dec = curr_w.wcs_pix2world([centroid], 0)[0][0:2]
@@ -232,7 +278,7 @@ def parse_single(result_file, fits_dir, mir_dir, pb, start_id=1, threshold=0.3):
         core_flux = max(0.0, core_flux)
         core_frac = core_flux / total_flux
         #origin_flux = total_flux
-        total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
+        #total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
         #bmaj, bmin = restore_bmaj_bmin(b1, b2, size, clas)
         bmaj, bmin = max(b1, b2), min(b1, b2)
         pa = 90 if box_w > box_h else 0
@@ -242,19 +288,15 @@ def parse_single(result_file, fits_dir, mir_dir, pb, start_id=1, threshold=0.3):
         out_line = '     '.join(out_line)
         start_id += 1
         outlines.append(out_line)
-        if (idx % 1000 == 0):
-            print('Done %d' % (idx + 1))
-        # if (idx == 2000):
-        #     break
     
-    with open('icrar_560MHz_1000h_v3_st_%d.txt' % start_id, 'w') as fout:
+    with open('icrar_560MHz_1000h_v4_st_%d.txt' % start_id, 'w') as fout:
         fc = os.linesep.join(outlines)
         fout.write(fc)
 
 if __name__ == '__main__':
-    result_file = '20593462.result'
-    fits_dir = 'split_B1_1000h_test'
-    mir_dir = 'split_B1_1000h_test_mir'
-    pb = 'PrimaryBeam_B1.fits'
-    parse_single(result_file, fits_dir, mir_dir, pb, start_id=0, threshold=0.16)
+    result_file = '21592081.result'
+    fits_dir = 'split_B1_1000h_test_pbcorrected'
+    mir_dir = 'split_B1_1000h_test_pbcorrected_mir'
+    #parse_single(result_file, fits_dir, mir_dir, start_id=0, threshold=0.8)
+    visual_result(result_file, fits_dir, 'reg_out')
 

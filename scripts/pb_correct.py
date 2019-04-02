@@ -13,7 +13,7 @@ of a cutout fits image
 
 For B1, the size of the cutout fits image is roughly the same as the pixel resolution of the PB.
 
-8.08729927827E-02 - 1.67847000000E-04 * 205 = 0.04646435778270001
+8.08729927827E-02 - 1.67847000000E-04 * 209 = 0.045792969782700005
 
 Therefore we use a approximate "lazy" method, 
     i.e. the entire cutout fits image will be corrected using the same PB value corresponding to
