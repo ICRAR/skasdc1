@@ -492,12 +492,14 @@ def _find_fid_from_db(conn, ra, dec, table_name):
     return res
 
 def verify_flux(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_fn, fancy=True):
+    size_ddd = defaultdict(int)
     pb_wcs, pb_data = _setup_pb(pb)
     g_db_pool = _setup_db_pool()
     conn = g_db_pool.getconn()
     sigma_dict = dict()
     entries = []
     source_entries = []
+    size_list = []
     with open(cat_csv, 'r') as fin:
         lines = fin.read().splitlines()
     for idx, line in enumerate(lines[1:]): #skip the header, test the first few only
@@ -509,6 +511,8 @@ def verify_flux(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_f
         lll = line.split(',')
         source_id = int(lll[0])
         model_flux = float(lll[5])
+        kkk = lll[-5] + "_" + lll[-4]
+       
         ra, dec, major, minor, pa, combo = ret
         avg_image_flux = _calc_image_flux(model_flux, major, minor, ra, dec, pb_wcs, pb_data)
         res = _find_fid_from_db(conn, ra, dec, table_name)
@@ -530,6 +534,8 @@ def verify_flux(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_f
             if (len(rrr) == 0):
                 print('fail to produce valid box for %s at %f, %f' % (fits_img, ra, dec))
                 continue
+            size_list.append(kkk)
+            size_ddd[kkk] += 1
             x1, y1, x2, y2, h, w, cx, cy = rrr
             x1, y1, x2, y2 = [int(x) for x in (x1, y1, x2, y2)]
             # since for_png was set to true, the coordinates are based on PNG 
@@ -555,6 +561,11 @@ def verify_flux(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_f
     
     with open('source_entry.csv', 'w') as fout:
         fout.write(os.linesep.join(source_entries))
+    
+    with open('size.csv', 'w') as fout:
+        fout.write(os.linesep.join(size_list))
+    
+    print(size_ddd)
 
 def create_coco_anno():
     anno = dict()

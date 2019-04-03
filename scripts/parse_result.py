@@ -46,38 +46,45 @@ def obtain_sigma(fits_fn):
 def restore_bmaj_bmin(b1, b2, size, clas):
     """
     Restore from image measurements into sky model parameters
-    b1, b2 = bmaj, bmin
+    b1, b2 = bmaj, bmin but in number of pixels!
     """
-    if (b1 ** 2 > g2):
-        w1 = np.sqrt(b1 ** 2 - g2)
+    # degridding
+    b1 *= pixel_res_x * 3600
+    b2 *= pixel_res_x * 3600
+
+    gap = (b1) ** 2 - g2
+    if (gap > 0):
+        w1 = np.sqrt(gap)
     else:
         w1 = b1
-    if (b2 ** 2 > g2):
-        w2 = np.sqrt(b2 ** 2 - g2)
+
+    gap = (b2) ** 2 - g2
+    if (gap > 0):
+        w2 = np.sqrt(gap)
     else:
         w2 = b2
 
-    if (2 == size): 
-        if (clas in [1, 3]): # extended source
-            # don't change anything
-            bmaj = w1
-            bmin = w2
-        else:
-            # assuming core is fully covered by source
-            bmaj = w1 * 2.0 #+ g / 10.0 
-            bmin = bmaj #keep it circular Gaussian
-    else: # compact source [1 or 3]
-        # 1,2,3 for SS-AGNs, FS-AGNs, SFGs
-        # 1,2,3 for LAS, Gaussian, Exponential
-        if (1 == clas and 1 == size):
-            bmaj = w1 * 2.0
-            bmin = w2 * 2.0
-        elif (3 == clas and 3 == size):
-            bmaj = w1 / cons
-            bmin = w2 / cons
-        else:
-            raise Exception('unknown combination')
-    return bmaj, bmin
+    # if (2 == size): 
+    #     if (clas in [1, 3]): # extended source
+    #         # don't change anything
+    #         bmaj = w1
+    #         bmin = w2
+    #     else:
+    #         # assuming core is fully covered by source
+    #         bmaj = w1 * 2.0 #+ g / 10.0 
+    #         bmin = bmaj #keep it circular Gaussian
+    # else: # compact source [1 or 3]
+    #     # 1,2,3 for SS-AGNs, FS-AGNs, SFGs
+    #     # 1,2,3 for LAS, Gaussian, Exponential
+    #     if (1 == clas and 1 == size):
+    #         bmaj = w1 * 2.0
+    #         bmin = w2 * 2.0
+    #     elif (3 == clas and 3 == size):
+    #         bmaj = w1 / cons
+    #         bmin = w2 / cons
+    #     else:
+    #         raise Exception('unknown combination')
+    return w1, w2
 
 def _derive_flux_from_msg(msg):
     for line in msg.split(os.linesep):
@@ -181,7 +188,14 @@ def visual_result(result_file, fits_dir, out_dir, threshold=0.8, show_class=True
                 fout.write(os.linesep)
                 fout.write(os.linesep.join(text_dict[k]))
 
-def parse_single(result_file, fits_dir, mir_dir, start_id=1, threshold=0.8):
+def _setup_pb(pb_fn):
+    pbhdu = pyfits.open(pb_fn)
+    pbhead = pbhdu[0].header
+    pb_wcs = pywcs.WCS(pbhead)
+    pb_data = pbhdu[0].data[0][0]
+    return pb_wcs, pb_data
+
+def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.8):
     """
     For B1
     SIZE_CLASS, count
@@ -214,7 +228,7 @@ def parse_single(result_file, fits_dir, mir_dir, start_id=1, threshold=0.8):
         bmaj/bmin are the exponential scale lengths along the axes of the ellipse.
 
     """
-
+    pb_wcs, pb_data = _setup_pb(pb_fn)
     with open(result_file, 'r') as fin:
         lines = fin.read().splitlines()
     curr_fn = ''
@@ -240,13 +254,13 @@ def parse_single(result_file, fits_dir, mir_dir, start_id=1, threshold=0.8):
             curr_w = pywcs.WCS(fhead)
             curr_d = hdulist[0].data[0][0]
             h, w = curr_d.shape
-            print(h, w)
+            #print(h, w)
         x1, y1, x2, y2 = [float(x) for x in fds[3].split('-')]
         box_h, box_w = y2 - y1 + 1, x2 - x1 + 1
         b1 = np.sqrt(box_h ** 2 + box_w ** 2)
         b2 = min(box_h, box_w)
         clas = int(fds[1])#.split('_')
-        size = clas_size_dict[clas]
+        size = 1
         cx = (x1 + x2) / 2 + 1
         cy = (y1 + y2) / 2 + 1
         #print(cy, img_h)
@@ -259,7 +273,6 @@ def parse_single(result_file, fits_dir, mir_dir, start_id=1, threshold=0.8):
         failed_attempts = []
         mir_file = osp.join(mir_dir, fn.replace('.fits', '.mir'))
         total_flux = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, failed_attempts)
-        print(total_flux)
         # if (total_flux is None or np.isnan(total_flux)):
         #     #source_of_flux = 'histo'
         #     miriad_cmd = histo_tpl % (mir_file, x1, h - y2, x2, h - y1)
@@ -267,7 +280,7 @@ def parse_single(result_file, fits_dir, mir_dir, start_id=1, threshold=0.8):
         #     if (total_flux is None or np.isnan(total_flux)):
         #         #source_of_flux = 'np.sum'
         #         total_flux = np.sum(sli)
-        if (total_flux <= 0):
+        if (total_flux is None or total_flux <= 0):
             print('Failed miriad - ', failed_attempts)
             sli = curr_d[(h - y2):min(h - y1 + 1, h), x1:min(x2 + 1, w)]
             sli = sli[np.where(sli >= 0)]
@@ -287,18 +300,18 @@ def parse_single(result_file, fits_dir, mir_dir, start_id=1, threshold=0.8):
         core_flux = max(0.0, core_flux)
         core_frac = core_flux / total_flux
         #origin_flux = total_flux
-        #total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
-        #bmaj, bmin = restore_bmaj_bmin(b1, b2, size, clas)
-        bmaj, bmin = max(b1, b2), min(b1, b2)
+        total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
+        print(total_flux)
+        bmaj, bmin = restore_bmaj_bmin(b1, b2, size, clas)
+        #bmaj, bmin = max(b1, b2), min(b1, b2)
         pa = 90 if box_w > box_h else 0
-        
         out_line = [start_id, ra, dec, ra, dec, total_flux, core_frac, bmaj, bmin, pa, size, clas]#, origin_flux, core_flux, source_of_flux]
         out_line = [str(x) for x in out_line]
         out_line = '     '.join(out_line)
         start_id += 1
         outlines.append(out_line)
     
-    with open('icrar_560MHz_1000h_v4_st_%d.txt' % start_id, 'w') as fout:
+    with open('icrar_560MHz_1000h_v5_st_%d.txt' % start_id, 'w') as fout:
         fc = os.linesep.join(outlines)
         fout.write(fc)
 
@@ -306,6 +319,7 @@ if __name__ == '__main__':
     result_file = '21592081.result'
     fits_dir = 'split_B1_1000h_test_pbcorrected'
     mir_dir = 'split_B1_1000h_test_pbcorrected_mir'
-    parse_single(result_file, fits_dir, mir_dir, start_id=0, threshold=0.8)
+    pb = 'PrimaryBeam_B1.fits'
+    parse_single(result_file, fits_dir, mir_dir, pb, start_id=0, threshold=0.8)
     #visual_result(result_file, fits_dir, 'reg_out')
 

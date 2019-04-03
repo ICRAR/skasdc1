@@ -97,6 +97,13 @@ def gen_ds9_region(cat_csv, fits_img, pb, consider_psf=True, fancy=True):
     2_2,    3728
     2_3,    179946
     3_3,    372
+
+    But after sigma clipping
+    {'1_1': 117, '2_1': 37, '2_2': 278, '3_3': 250, '2_3': 19585}
+
+    COLUMN11:    SIZE    [none]    1,2,3 for LAS, Gaussian, Exponential
+    COLUMN12:    CLASS    [none]   1,2,3 for SS-AGNs, FS-AGNs,SFGs
+
     """
     pbhdu = pyfits.open(pb)
     pbhead = pbhdu[0].header
