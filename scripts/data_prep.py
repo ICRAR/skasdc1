@@ -20,12 +20,12 @@ mad2sigma = np.sqrt(2) * erfinv(2 * 0.75 - 1)
 
 
 cons = 2 ** 0.5
-pixel_res_x = 6.71387000000E-05#1.67847000000E-04 #abs(float(fhead['CDELT1']))
-pixel_res_y = 6.71387000000E-05#1.67847000000E-04 #abs(float(fhead['CDELT2']))
+pixel_res_x = 1.02168000000E-05#6.71387000000E-05#1.67847000000E-04 #abs(float(fhead['CDELT1']))
+pixel_res_y = 1.02168000000E-05#6.71387000000E-05#1.67847000000E-04 #abs(float(fhead['CDELT2']))
 g = 2 * (pixel_res_x * 3600) # gridding kernel size as per specs
 g2 = g ** 2
-BMAJ = 1.66666679434E-04#4.16666676756E-04
-BMIN = 1.66666679434E-04#4.16666676756E-04
+BMAJ = 2.53611124208E-05#1.66666679434E-04#4.16666676756E-04
+BMIN = 2.53611124208E-05#1.66666679434E-04#4.16666676756E-04
 psf_bmaj_ratio = BMAJ / pixel_res_x
 psf_bmin_ratio = BMIN / pixel_res_y
 synth_beam_size = psf_bmaj_ratio * psf_bmin_ratio
@@ -350,6 +350,7 @@ def draw_gt(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_dir, 
     with open(cat_csv, 'r') as fin:
         lines = fin.read().splitlines()
 
+    faint_sources = 0
     for idx, line in enumerate(lines[1:]): #skip the header, test the first few only
         # if (idx == 15000):
         #     break
@@ -374,7 +375,7 @@ def draw_gt(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_dir, 
         cur.execute(sqlStr)
         res = cur.fetchall()
         if (not res or len(res) == 0):
-            #print("Fail to find fits for source {0}".format(source_id))
+            print("Fail to find fits for source {0}".format(lll[0]))
             continue
         
         for fd in res:
@@ -387,6 +388,7 @@ def draw_gt(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_dir, 
             else:
                 clip_level = sigma_dict[fid]
             if (total_flux) < clip_level:
+                faint_sources += 1
                 continue
             
             rrr = _gen_single_bbox(fits_img, ra, dec, major, minor, pa, for_png=True)
@@ -398,7 +400,7 @@ def draw_gt(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_dir, 
             box_dict[fid].append(bp_fmt % (cx, cy, int(x2 - x1), int(y2 - y1)))
             #box_dict[fid].append(b_fmt % (ra, dec, int(x2 - x1 + 1), int(y2 - y1 + 1)))
             elip_dict[fid].append(e_fmt % (ra, dec, major / 2, minor / 2, 180 - pa))
-        
+    print('Discarded %d faint sources' % faint_sources)
     draw_sources(ret_dict, split_png_dir, target_dir)
     print(len(elip_dict), len(box_dict))
     region_sources(elip_dict, box_dict, target_dir.replace('png_gt', 'regions'))
@@ -613,22 +615,22 @@ def create_categories():
 if __name__ == '__main__':
     cur_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.join(cur_dir, '..', 'data')
-    train_csv =  osp.join(data_dir, 'TrainingSet_B2_v2.csv')
-    tablename = 'b2_1000h_train'
-    fits_cutout_dir = osp.join(data_dir, 'split_B2_1000h_train')
-    #build_fits_cutout_index(fits_cutout_dir, tablename)
-    #png_dir = osp.join(data_dir, 'split_B1_1000h_png_val')
-    tgt_png_dir = osp.join(data_dir, 'split_B2_1000h_png_gt')
-    png_dir = osp.join(data_dir, 'split_B2_1000h_png_val')
-    #png_dir = osp.join(data_dir, 'split_B2_1000h_png_train')
+    train_csv =  osp.join(data_dir, 'TrainingSet_B5_v2.csv')
+    tablename = 'b5_1000h_train'
+    fits_cutout_dir = osp.join(data_dir, 'split_B5_1000h_train')
+    build_fits_cutout_index(fits_cutout_dir, tablename)
+    #png_dir = osp.join(data_dir, 'split_B5_1000h_png_val')
+    tgt_png_dir = osp.join(data_dir, 'split_B5_1000h_png_gt')
+    #png_dir = osp.join(data_dir, 'split_B5_1000h_png_val')
+    png_dir = osp.join(data_dir, 'split_B5_1000h_png_train')
     #fits2png(fits_cutout_dir, png_dir)
-    pb = osp.join(data_dir, 'PrimaryBeam_B2.fits')
-    #draw_gt(train_csv, fits_cutout_dir, png_dir, tablename, pb, tgt_png_dir, fancy=True)
-    images, annolist = prepare_json(train_csv, fits_cutout_dir, png_dir, tablename, pb)
-    anno = create_coco_anno()
-    anno['images'] = images
-    anno['annotations'] = annolist
-    with open(osp.join(data_dir, 'instances_val_B2_1000h.json'), 'w') as fout:
-        json.dump(anno, fout)
+    pb = osp.join(data_dir, 'PrimaryBeam_B5.fits')
+    draw_gt(train_csv, fits_cutout_dir, png_dir, tablename, pb, tgt_png_dir, fancy=True)
+    # images, annolist = prepare_json(train_csv, fits_cutout_dir, png_dir, tablename, pb)
+    # anno = create_coco_anno()
+    # anno['images'] = images
+    # anno['annotations'] = annolist
+    # with open(osp.join(data_dir, 'instances_val_B2_1000h.json'), 'w') as fout:
+    #     json.dump(anno, fout)
     #output_fn = osp.join(data_dir, 'flux_compare')
     #verify_flux(train_csv, fits_cutout_dir, png_dir, tablename, pb, output_fn)

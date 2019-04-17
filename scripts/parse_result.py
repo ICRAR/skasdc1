@@ -16,14 +16,20 @@ from collections import defaultdict
 """
 Convert results from ClaRAN output into competition format
 """
+FREQ = 'B2'
+DISK_THRESHOLD = 10 ** -3.6 # or NONE
+
+pix_size_dict = {'B1': 1.67847000000E-04, 'B2': 6.71387000000E-05, 'B5': 1.02168000000E-05}
+beam_size_dict = {'B1': 4.16666676756E-04, 'B2': 1.66666679434E-04, 'B5': 2.53611124208E-05}
+freq_dict = {'B1': 560, 'B2': 1400, 'B5': 9200}
 
 cons = 2 ** 0.5
-pixel_res_x = 1.67847000000E-04 #abs(float(fhead['CDELT1']))
-pixel_res_y = 1.67847000000E-04 #abs(float(fhead['CDELT2']))
+pixel_res_x = pix_size_dict[FREQ] #1.67847000000E-04 #abs(float(fhead['CDELT1']))
+pixel_res_y = pixel_res_x #1.67847000000E-04 #abs(float(fhead['CDELT2']))
 g = 2 * (pixel_res_x * 3600) # gridding kernel size as per specs
 g2 = g ** 2
-BMAJ = 4.16666676756E-04
-BMIN = 4.16666676756E-04
+BMAJ = beam_size_dict[FREQ] #4.16666676756E-04
+BMIN = BMAJ#4.16666676756E-04
 psf_bmaj_ratio = BMAJ / pixel_res_x
 psf_bmin_ratio = BMIN / pixel_res_y
 synth_beam_size = psf_bmaj_ratio * psf_bmin_ratio
@@ -31,10 +37,11 @@ synth_beam_size = psf_bmaj_ratio * psf_bmin_ratio
 #  object=disks allows for a "less Gaussian" and "sharper" object truncation and so it will be more flexible with non-compact source fluxes.
 imfit_tpl = 'imfit in=%s "region=boxes(%d, %d, %d, %d)" object=gaussian'
 histo_tpl = 'histo in=%s "region=boxes(%d, %d, %d, %d)"'
+imfit_hi_flux_tpl = 'imfit in=%s "region=boxes(%d, %d, %d, %d)" object=disk'
 
-b1_sigma = 3.5789029744176247e-07
-b1_median = -2.9249549e-08
-b1_three_sigma = -2.9249549e-08 + 3 * b1_sigma
+#b1_sigma = 3.5789029744176247e-07
+#b1_median = -2.9249549e-08
+#b1_three_sigma = -2.9249549e-08 + 3 * b1_sigma
 
 def obtain_sigma(fits_fn):
     with fits.open(fits_fn) as f:
@@ -102,8 +109,13 @@ def _derive_flux_from_msg(msg):
 
 incr = 1
 
-def _get_integrated_flux(mir_file, x1, y1, x2, y2, h, w, error_codes):
-    miriad_cmd = imfit_tpl % (mir_file, x1, y1, x2, y2)
+def _get_integrated_flux(mir_file, x1, y1, x2, y2, h, w, error_codes, large_flux=False):
+    if (large_flux):
+        cmd_tpl = imfit_hi_flux_tpl
+    else:
+        cmd_tpl = imfit_tpl
+
+    miriad_cmd = cmd_tpl % (mir_file, x1, y1, x2, y2)
     status, msg = commands.getstatusoutput(miriad_cmd)
     if (status == 0):
         #print("Can't find integrated flux from %s: %s" % (miriad_cmd, msg))
@@ -166,7 +178,17 @@ def visual_result(result_file, fits_dir, out_dir, threshold=0.8, show_class=True
         if (fn not in img_dict):
             hdulist = pyfits.open(osp.join(fits_dir, fn))
             #print(hdulist[0].data.shape)
-            img_h, w = hdulist[0].data.shape[2:]
+            bshape = hdulist[0].data.shape
+            if (len(bshape) == 2):
+                img_h, w = bshape
+            elif (len(bshape) == 4):
+                if (bshape[0] == 1 and bshape[1] == 1):
+                    img_h, w = bshape[2:]
+                else:
+                    img_h, w = bshape[0:2]
+            else:
+                raise Exception('Unknown shape {0} for {1}'.format(bshape, fn))
+            #img_h, w = hdulist[0].data.shape[2:]
             img_dict[fn] = (img_h, w)
         else:
             img_h, w = img_dict[fn]
@@ -235,8 +257,7 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
     curr_fn = ''
     curr_w = None
     curr_d = None
-    img_dict = dict()
-    clas_size_dict = {1:1, 2:2, 3:2}
+    fit_by_disks = 0
     outlines = ['ID      RA (core)     DEC (core)  RA (centroid) DEC (centroid)           FLUX      Core frac           BMAJ           BMIN             PA      SIZE     CLASS']
     for idx, line in enumerate(lines):
         if (idx % 1000 == 0):
@@ -270,42 +291,45 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
         ra, dec = curr_w.wcs_pix2world([centroid], 0)[0][0:2]
         x1, y1, x2, y2 = [int(x) for x in (x1, y1, x2, y2)]
         
-        #source_of_flux = 'imfit'
+        sli = None
+        if (clas == 3):
+            core_flux = 0.0
+        else:
+            if (clas == 1):
+                core_flux = curr_d[(h - y1 + h - y2) // 2][(x1 + x2) // 2]
+            else:
+                #if (sli is None):
+                sli = curr_d[(h - y2):min(h - y1 + 1, h), x1:min(x2 + 1, w)]
+                core_flux = np.max(sli)
+        core_flux = max(0.0, core_flux)
+
         failed_attempts = []
         mir_file = osp.join(mir_dir, fn.replace('.fits', '.mir'))
         total_flux = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, failed_attempts)
-        # if (total_flux is None or np.isnan(total_flux)):
-        #     #source_of_flux = 'histo'
-        #     miriad_cmd = histo_tpl % (mir_file, x1, h - y2, x2, h - y1)
-        #     total_flux = _get_integrated_flux_from_histo(miriad_cmd)
-        #     if (total_flux is None or np.isnan(total_flux)):
-        #         #source_of_flux = 'np.sum'
-        #         total_flux = np.sum(sli)
-        sli = None
         if (total_flux is None or total_flux <= 0):
             print('Failed miriad - ', failed_attempts)
-            sli = curr_d[(h - y2):min(h - y1 + 1, h), x1:min(x2 + 1, w)]
+            if (sli is None):
+                sli = curr_d[(h - y2):min(h - y1 + 1, h), x1:min(x2 + 1, w)]
             sli = sli[np.where(sli >= 0)]
             total_flux = np.sum(sli) / synth_beam_size
             if (total_flux <= 0):
                 print('still non-positive integrated flux at %s' % fn)
                 continue # ignore this source
-        if (clas == 3): # 1 component
-            core_flux = 0.0
-        else:
-            if (clas == 1): # 3 component
-                core_flux = curr_d[(h - y1 + h - y2) // 2][(x1 + x2) // 2]
-            else: # 2 component
-                #ind = np.unravel_index(np.argmax(sli, axis=None), sli.shape)
-                #core_flux = sli[ind]
-                if (sli is None):
-                    sli = curr_d[(h - y2):min(h - y1 + 1, h), x1:min(x2 + 1, w)]
-                core_flux = np.max(sli)
-        core_flux = max(0.0, core_flux)
+        
         core_frac = core_flux / total_flux
         #origin_flux = total_flux
         total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
-        print(total_flux)
+        if (DISK_THRESHOLD is not None and total_flux > DISK_THRESHOLD):
+            # we use disk as IMFIT object rather than Gaussian for non-compact sources with large fluxes
+            large_total_flux = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, 
+                                              failed_attempts, large_flux=True)
+            if not (large_total_flux is None or large_total_flux <= 0):
+                total_flux = large_total_flux
+                core_frac = core_flux / total_flux
+                total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
+                fit_by_disks += 1
+
+        #print(total_flux)
         bmaj, bmin = restore_bmaj_bmin(b1, b2, size, clas)
         #bmaj, bmin = max(b1, b2), min(b1, b2)
         pa = 90 if box_w > box_h else 0
@@ -315,15 +339,24 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
         start_id += 1
         outlines.append(out_line)
     
-    with open('icrar_560MHz_1000h_v5_st_%d.txt' % start_id, 'w') as fout:
+    if (fit_by_disks > 0):
+        print('Fit by disks: %d' % fit_by_disks)
+    ver = 1
+    submit_fn = 'icrar_%dMHz_1000h_v%d.txt' % (freq_dict[FREQ], ver)
+    while(osp.exists(submit_fn)):
+        ver += 1
+        submit_fn = 'icrar_%dMHz_1000h_v%d.txt' % (freq_dict[FREQ], ver)
+
+    with open(submit_fn, 'w') as fout:
         fc = os.linesep.join(outlines)
         fout.write(fc)
 
 if __name__ == '__main__':
-    result_file = '21592081.result'
-    fits_dir = 'split_B1_1000h_test'
-    mir_dir = 'split_B1_1000h_test_mir'
-    pb = 'PrimaryBeam_B1.fits'
+    #result_file = '21592081.result'
+    result_file = '%s_v1.result' % FREQ
+    fits_dir = 'split_%s_1000h_test' % FREQ
+    mir_dir = 'split_%s_1000h_test_mir' % FREQ
+    pb = 'PrimaryBeam_%s.fits' % FREQ
     parse_single(result_file, fits_dir, mir_dir, pb, start_id=0, threshold=0.8)
     #visual_result(result_file, fits_dir, 'reg_out')
 

@@ -33,7 +33,7 @@ def dist_plot(x_fn):
     print(xlines[2])
     fluxes = [np.log10(float(x.split()[-7])) for x in xlines]
     print(fluxes[0:30])
-    plt.hist(fluxes, bins=10)
+    plt.hist(fluxes, bins=40)
     plt.show()
 
 
