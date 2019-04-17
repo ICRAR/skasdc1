@@ -28,6 +28,7 @@ psf_bmaj_ratio = BMAJ / pixel_res_x
 psf_bmin_ratio = BMIN / pixel_res_y
 synth_beam_size = psf_bmaj_ratio * psf_bmin_ratio
 
+#  object=disks allows for a "less Gaussian" and "sharper" object truncation and so it will be more flexible with non-compact source fluxes.
 imfit_tpl = 'imfit in=%s "region=boxes(%d, %d, %d, %d)" object=gaussian'
 histo_tpl = 'histo in=%s "region=boxes(%d, %d, %d, %d)"'
 
@@ -111,7 +112,7 @@ def _get_integrated_flux(mir_file, x1, y1, x2, y2, h, w, error_codes):
         if (len(error_codes) > 3):
             return None
         else:
-            print(miriad_cmd)
+            print(miriad_cmd, msg)
             error_codes.append(status)
             x1 = max(0, x1 - incr)
             x2 = min(w - 1, x2 + incr)
@@ -252,7 +253,7 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
             hdulist = pyfits.open(fpath)
             fhead = hdulist[0].header
             curr_w = pywcs.WCS(fhead)
-            curr_d = hdulist[0].data[0][0]
+            curr_d = hdulist[0].data
             h, w = curr_d.shape
             #print(h, w)
         x1, y1, x2, y2 = [float(x) for x in fds[3].split('-')]
@@ -280,6 +281,7 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
         #     if (total_flux is None or np.isnan(total_flux)):
         #         #source_of_flux = 'np.sum'
         #         total_flux = np.sum(sli)
+        sli = None
         if (total_flux is None or total_flux <= 0):
             print('Failed miriad - ', failed_attempts)
             sli = curr_d[(h - y2):min(h - y1 + 1, h), x1:min(x2 + 1, w)]
@@ -296,6 +298,8 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
             else: # 2 component
                 #ind = np.unravel_index(np.argmax(sli, axis=None), sli.shape)
                 #core_flux = sli[ind]
+                if (sli is None):
+                    sli = curr_d[(h - y2):min(h - y1 + 1, h), x1:min(x2 + 1, w)]
                 core_flux = np.max(sli)
         core_flux = max(0.0, core_flux)
         core_frac = core_flux / total_flux
@@ -317,8 +321,8 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
 
 if __name__ == '__main__':
     result_file = '21592081.result'
-    fits_dir = 'split_B1_1000h_test_pbcorrected'
-    mir_dir = 'split_B1_1000h_test_pbcorrected_mir'
+    fits_dir = 'split_B1_1000h_test'
+    mir_dir = 'split_B1_1000h_test_mir'
     pb = 'PrimaryBeam_B1.fits'
     parse_single(result_file, fits_dir, mir_dir, pb, start_id=0, threshold=0.8)
     #visual_result(result_file, fits_dir, 'reg_out')
