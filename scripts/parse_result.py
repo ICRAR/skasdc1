@@ -16,8 +16,9 @@ from collections import defaultdict
 """
 Convert results from ClaRAN output into competition format
 """
-FREQ = 'B2'
-DISK_THRESHOLD = 10 ** -3.6 # or NONE
+FREQ = 'B1'
+DISK_THRESHOLD = 10 ** -3.6 # or NONE, meaning don't do disk fitting ever
+MIRIAD_FOR_FLUX_ONLY = False
 
 pix_size_dict = {'B1': 1.67847000000E-04, 'B2': 6.71387000000E-05, 'B5': 1.02168000000E-05}
 beam_size_dict = {'B1': 4.16666676756E-04, 'B2': 1.66666679434E-04, 'B5': 2.53611124208E-05}
@@ -95,17 +96,38 @@ def restore_bmaj_bmin(b1, b2, size, clas):
     return w1, w2
 
 def _derive_flux_from_msg(msg):
+    tt_flux = None
+    bmaj = None
+    bmin = None
+    pa = None
+    beam_checked = False
     for line in msg.split(os.linesep):
+        fds = line.split()
+        if (not beam_checked and line.find('Beam Position angle') > -1):
+            beam_checked = True
+            continue
         if (line.find('Total integrated flux') > -1):
-            fds = line.split()
-            """
-            for idx, fd in enumerate(fds):
-                if (fd == '+/-'):
-                    print(idx - 1)
-                    return float(fds[idx - 1])
-            """
-            return float(fds[3])
-    return None
+            tt_flux = float(fds[3])
+            if (MIRIAD_FOR_FLUX_ONLY):
+                break
+        elif (line.find('Major axis') > -1):
+            bmaj = float(fds[3])
+        elif (line.find('Minor axis') > -1):
+            bmin = float(fds[3])
+        elif (pa is None and line.find('Position angle') > -1):
+            #miriad pa is measured from north through east
+            #sdc1 pa is measured from due west clockwise
+            pa = float(fds[3]) - 90
+        elif (line.find('Deconvolved Major') > -1):
+            try:
+                bmaj = float(fds[5]) # for gaussian sources, this overwrites the "Major/minor axis" above
+                bmin = float(fds[6])
+            except Exception as exp:
+                print(exp)
+                print(fds)
+                print('Use convolved bmaj, bmin', bmaj, bmin)
+                continue
+    return tt_flux, bmaj, bmin, pa
 
 incr = 1
 
@@ -130,7 +152,7 @@ def _get_integrated_flux(mir_file, x1, y1, x2, y2, h, w, error_codes, large_flux
             x2 = min(w - 1, x2 + incr)
             y1 = max(0, y1 - incr)
             y2 = min(h - 1, y2 + incr)
-            return _get_integrated_flux(mir_file, x1, y1, x2, y2, h, w, error_codes)
+            return _get_integrated_flux(mir_file, x1, y1, x2, y2, h, w, error_codes, large_flux=large_flux)
 
 def _get_integrated_flux_from_histo(miriad_cmd):
     status, msg = commands.getstatusoutput(miriad_cmd)
@@ -217,6 +239,18 @@ def _setup_pb(pb_fn):
     pb_wcs = pywcs.WCS(pbhead)
     pb_data = pbhdu[0].data[0][0]
     return pb_wcs, pb_data
+
+def _convert_pa(miriad_pa):
+    """
+    Given miriad pa, returns sdc1 pa
+    miriad pa is measured from north through east
+    sdc1 pa is measured from due west clockwise
+    """
+    # ret = miriad_pa + 90
+    # if (ret > 270):
+    #     ret-= 360
+    # return ret
+    return miriad_pa - 90
 
 def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.8):
     """
@@ -305,7 +339,7 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
 
         failed_attempts = []
         mir_file = osp.join(mir_dir, fn.replace('.fits', '.mir'))
-        total_flux = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, failed_attempts)
+        total_flux, bmaj, bmin, pa = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, failed_attempts)
         if (total_flux is None or total_flux <= 0):
             print('Failed miriad - ', failed_attempts)
             if (sli is None):
@@ -320,8 +354,8 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
         #origin_flux = total_flux
         total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
         if (DISK_THRESHOLD is not None and total_flux > DISK_THRESHOLD):
-            # we use disk as IMFIT object rather than Gaussian for non-compact sources with large fluxes
-            large_total_flux = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, 
+            # we use 'disk' as IMFIT object rather than Gaussian for non-compact sources with large fluxes
+            large_total_flux, bmaj, bmin, pa = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, 
                                               failed_attempts, large_flux=True)
             if not (large_total_flux is None or large_total_flux <= 0):
                 total_flux = large_total_flux
@@ -329,10 +363,11 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
                 total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
                 fit_by_disks += 1
 
-        #print(total_flux)
-        bmaj, bmin = restore_bmaj_bmin(b1, b2, size, clas)
-        #bmaj, bmin = max(b1, b2), min(b1, b2)
-        pa = 90 if box_w > box_h else 0
+        if (MIRIAD_FOR_FLUX_ONLY):
+            bmaj, bmin = restore_bmaj_bmin(b1, b2, size, clas)
+            #bmaj, bmin = max(b1, b2), min(b1, b2)
+            pa = 90 if box_w > box_h else 0
+       
         out_line = [start_id, ra, dec, ra, dec, total_flux, core_frac, bmaj, bmin, pa, size, clas]#, origin_flux, core_flux, source_of_flux]
         out_line = [str(x) for x in out_line]
         out_line = '     '.join(out_line)
@@ -341,7 +376,7 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
     
     if (fit_by_disks > 0):
         print('Fit by disks: %d' % fit_by_disks)
-    ver = 1
+    ver = 7
     submit_fn = 'icrar_%dMHz_1000h_v%d.txt' % (freq_dict[FREQ], ver)
     while(osp.exists(submit_fn)):
         ver += 1
@@ -352,8 +387,8 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
         fout.write(fc)
 
 if __name__ == '__main__':
-    #result_file = '21592081.result'
-    result_file = '%s_v1.result' % FREQ
+    result_file = '21592081.result'
+    #result_file = '%s_v1.result' % FREQ
     fits_dir = 'split_%s_1000h_test' % FREQ
     mir_dir = 'split_%s_1000h_test_mir' % FREQ
     pb = 'PrimaryBeam_%s.fits' % FREQ

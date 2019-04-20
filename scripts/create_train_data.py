@@ -152,6 +152,7 @@ def gen_ds9_region(cat_csv, fits_img, pb, consider_psf=True, fancy=True):
             bmaj = float(fds[7])
             bmin = float(fds[8])
             opa = float(fds[9])
+            # ds9 angle starts from due east, sdc1 angles starts from due west (as per specs)
             pa = 180 - opa
             if (fancy):
                 #TODO use w1, w2 to replace bmaj, bmin
