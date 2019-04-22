@@ -17,8 +17,9 @@ from collections import defaultdict
 Convert results from ClaRAN output into competition format
 """
 FREQ = 'B1'
-DISK_THRESHOLD = 10 ** -3.6 # or NONE, meaning don't do disk fitting ever
+DISK_THRESHOLD = None # 10 ** -3.6 # or NONE, meaning don't do disk fitting ever
 MIRIAD_FOR_FLUX_ONLY = False
+MAX_FLUX = 10 ** 1.27
 
 pix_size_dict = {'B1': 1.67847000000E-04, 'B2': 6.71387000000E-05, 'B5': 1.02168000000E-05}
 beam_size_dict = {'B1': 4.16666676756E-04, 'B2': 1.66666679434E-04, 'B5': 2.53611124208E-05}
@@ -115,9 +116,8 @@ def _derive_flux_from_msg(msg):
         elif (line.find('Minor axis') > -1):
             bmin = float(fds[3])
         elif (pa is None and line.find('Position angle') > -1):
-            #miriad pa is measured from north through east
-            #sdc1 pa is measured from due west clockwise
-            pa = float(fds[3]) - 90
+            pat = float(fds[3])
+            pa = _convert_pa(pat)
         elif (line.find('Deconvolved Major') > -1):
             try:
                 bmaj = float(fds[5]) # for gaussian sources, this overwrites the "Major/minor axis" above
@@ -246,11 +246,10 @@ def _convert_pa(miriad_pa):
     miriad pa is measured from north through east
     sdc1 pa is measured from due west clockwise
     """
-    # ret = miriad_pa + 90
-    # if (ret > 270):
-    #     ret-= 360
-    # return ret
-    return miriad_pa - 90
+    if (miriad_pa > 0):
+        return miriad_pa - 90
+    else:
+        return miriad_pa + 90
 
 def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.8):
     """
@@ -355,12 +354,15 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
         total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
         if (DISK_THRESHOLD is not None and total_flux > DISK_THRESHOLD):
             # we use 'disk' as IMFIT object rather than Gaussian for non-compact sources with large fluxes
-            large_total_flux, bmaj, bmin, pa = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, 
+            ltf, lbmaj, lbmin, lpa = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, 
                                               failed_attempts, large_flux=True)
-            if not (large_total_flux is None or large_total_flux <= 0):
-                total_flux = large_total_flux
+            if not (ltf is None or ltf <= 0 or np.isnan(ltf) or ltf > MAX_FLUX):
+                total_flux = ltf
                 core_frac = core_flux / total_flux
                 total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
+                bmaj = lbmaj
+                bmin = lbmin
+                pa = lpa
                 fit_by_disks += 1
 
         if (MIRIAD_FOR_FLUX_ONLY):
@@ -376,7 +378,7 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
     
     if (fit_by_disks > 0):
         print('Fit by disks: %d' % fit_by_disks)
-    ver = 7
+    ver = 8
     submit_fn = 'icrar_%dMHz_1000h_v%d.txt' % (freq_dict[FREQ], ver)
     while(osp.exists(submit_fn)):
         ver += 1
