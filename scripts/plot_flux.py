@@ -30,28 +30,24 @@ def comparison_plot(x_fn, y_fn, idx, title=None):
 def dist_plot(x_fn):
     with open(x_fn, 'r') as fin:
         xlines = fin.read().splitlines()[1:]
-    #xp = []
-    #print(xlines[2])
     fluxes_raw = [float(x.split()[-7]) for x in xlines]
     ff_raw = np.array(fluxes_raw, dtype=np.float32)
-    print('ff_raw <= 0', np.sum(ff_raw <= 0))
-
-    fluxes = [np.log10(float(x.split()[-7])) for x in xlines]
+    #fluxes = [np.log10(float(x.split()[-7])) for x in xlines]
+    fluxes = np.log10(ff_raw)
     #print(fluxes[0:30])
     print(max(fluxes), min(fluxes))
     ff = np.array(fluxes, dtype=np.float32)
     nan_ind = np.isnan(ff)
-    print(ff_raw[nan_ind])
-    print(np.sum(nan_ind))
+    print('raw values where their log10 is NaN:', ff_raw[nan_ind])
+    print('# of NaN values:', np.sum(nan_ind))
     ff = ff[np.where(~nan_ind)]
-    print(np.sum(ff > 1))
-    #ff = ff[np.where(ff < 1)]
+    print('# of fluxes greater than 10:', np.sum(ff > 1))
     plt.hist(ff, bins=40)
     plt.show()
 
 
 if __name__ == "__main__":
-    x_fn = '../data/icrar_560MHz_1000h_v8.txt'
+    x_fn = '../data/icrar_560MHz_1000h_v7.txt'
     y_fn = '../data/icrar_560MHz_1000h_v4.txt'
     #comparison_plot(x_fn, y_fn, -5, title='Size comparison, truth is V5')
     #comparison_plot(x_fn, y_fn, -7, title='Flux comparison, truth is V5')
