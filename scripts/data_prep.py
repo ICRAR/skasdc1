@@ -397,7 +397,7 @@ def draw_gt(cat_csv, split_fits_dir, split_png_dir, table_name, pb, target_dir, 
             x1, y1, x2, y2, h, w, cx, cy = rrr
             gs = GTSource(box=(x1, y1, x2, y2), clas=clas, size=size)
             ret_dict[fid].append(gs)
-            box_dict[fid].append(bp_fmt % (cx, cy, int(x2 - x1), int(y2 - y1)))
+            box_dict[fid].append(bp_fmt % (cx + 1, h - cy, int(x2 - x1), int(y2 - y1)))
             #box_dict[fid].append(b_fmt % (ra, dec, int(x2 - x1 + 1), int(y2 - y1 + 1)))
             elip_dict[fid].append(e_fmt % (ra, dec, major / 2, minor / 2, 180 - pa))
     print('Discarded %d faint sources' % faint_sources)
