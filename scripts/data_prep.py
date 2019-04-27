@@ -29,7 +29,7 @@ BMIN = 2.53611124208E-05#1.66666679434E-04#4.16666676756E-04
 psf_bmaj_ratio = BMAJ / pixel_res_x
 psf_bmin_ratio = BMIN / pixel_res_y
 synth_beam_size = psf_bmaj_ratio * psf_bmin_ratio
-NUM_SIGMA = 1
+NUM_SIGMA = 0.05
 
 b1_sigma = 3.5789029744176247e-07
 b1_median = -2.9249549e-08
@@ -308,7 +308,7 @@ def draw_sources(claran_result, png_dir, target_dir):
             plt.Rectangle((bbox[0], bbox[1]),
                           bbox[2] - bbox[0],
                           bbox[3] - bbox[1], fill=False,
-                          edgecolor='white', linewidth=0.2)
+                          edgecolor='green', linewidth=0.2)
             )
             # ax.text(bbox[0], bbox[1] - 2,
             #     '{0}C_{1}S'.format(cs.clas, cs.size),
