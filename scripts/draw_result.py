@@ -23,8 +23,8 @@ def parse_claran_result(result_file, threshold=0.8):
         if score < threshold:
             continue
         png_fid = fds[0]
-        if (not png_fid.startswith('SKAMid_B1_1000h_v354')):
-            continue
+        # if (not png_fid.startswith('SKAMid_B1_1000h_v354')):
+        #     continue
         clas = fds[1]
         x1, y1, x2, y2 = [float(x) for x in fds[3].split('-')]
         cs = ClaranSource(box=(x1, y1, x2, y2), clas=clas, score=score)
@@ -69,9 +69,10 @@ def draw_sources(claran_result, png_dir, target_dir):
 if __name__ == '__main__':
     data_dir = '/mnt/gleam3/ngas_data_volume/sdc1/data'
     data_dir = '/Users/chen/gitrepos/ml/skasdc1/data'
-    png_dir = 'split_B1_1000h_test_cool_png'
-    target_dir = 'split_B1_1000h_test_cool_png_pred'
-    result_file = 'w600.result'
+    data_dir = '/scratch/cwu'
+    png_dir = 'split_B5_1000h_test_png'
+    target_dir = 'split_B5_1000h_test_png_pred_v14'
+    result_file = 'B5_v3.result'
 
     claran_result = parse_claran_result(osp.join(data_dir, result_file))
     draw_sources(claran_result, osp.join(data_dir, png_dir), osp.join(data_dir, target_dir))

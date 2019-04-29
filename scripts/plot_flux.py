@@ -2,6 +2,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+import os.path as osp
+
 
 def comparison_plot(x_fn, y_fn, idx, title=None):
     with open(x_fn, 'r') as fin:
@@ -43,11 +45,12 @@ def dist_plot(x_fn):
     ff = ff[np.where(~nan_ind)]
     print('# of fluxes greater than 10:', np.sum(ff > 1))
     plt.hist(ff, bins=40)
+    plt.suptitle('Flux dist: ' + osp.splitext(osp.basename(x_fn))[0])
     plt.show()
 
 
 if __name__ == "__main__":
-    x_fn = '../data/icrar_560MHz_1000h_v7.txt'
+    x_fn = '../data/icrar_560MHz_1000h_v10.txt'
     y_fn = '../data/icrar_560MHz_1000h_v4.txt'
     #comparison_plot(x_fn, y_fn, -5, title='Size comparison, truth is V5')
     #comparison_plot(x_fn, y_fn, -7, title='Flux comparison, truth is V5')

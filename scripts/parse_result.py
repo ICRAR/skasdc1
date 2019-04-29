@@ -15,12 +15,29 @@ from collections import defaultdict
 
 """
 Convert results from ClaRAN output into competition format
+
+V5 - ALL gaussian fitting
+V6 - Large fluxes using disk_fitting
+V7 - Large fluxes using disk_fitting + size_angle_using_miriad
+V8 - ALL gaussian fitting + size_angle_using_miriad
+V9 - core_flux should be synthesis beam corrected (TBD)
 """
 FREQ = 'B1'
-DISK_THRESHOLD = None # 10 ** -3.6 # or NONE, meaning don't do disk fitting ever
-MIRIAD_FOR_FLUX_ONLY = False
-MAX_FLUX = 10 ** 1.27
+DISK_THRESHOLD = 10 ** -3.6 # or NONE, meaning don't do disk fitting ever
 
+# this is True for v5, v6, v9, v11
+MIRIAD_FOR_FLUX_ONLY = False
+
+ALIGN_ANGLE_DUE_WEST = True # for some reason, this was wrongly set to false until v11
+
+# this is True for v10, False for v7 and v8
+NOT_USE_MIRIAD_SIZE = True # this is used only if MIRIAD_FOR_FLUX_ONLY is False
+
+flux_rg_dict = {'B1': (10 ** -5.869366, 10 ** 1.269625), 
+                'B2': (10 ** -6.0987263, 10 ** 0.7686931), 
+                'B5': (10 ** -5.7739654, 10 ** -2.6884084)}
+
+MIN_FLUX_V5, MAX_FLUX_V5 = flux_rg_dict[FREQ]
 pix_size_dict = {'B1': 1.67847000000E-04, 'B2': 6.71387000000E-05, 'B5': 1.02168000000E-05}
 beam_size_dict = {'B1': 4.16666676756E-04, 'B2': 1.66666679434E-04, 'B5': 2.53611124208E-05}
 freq_dict = {'B1': 560, 'B2': 1400, 'B5': 9200}
@@ -127,6 +144,8 @@ def _derive_flux_from_msg(msg):
                 print(fds)
                 print('Use convolved bmaj, bmin', bmaj, bmin)
                 continue
+    if (not MIRIAD_FOR_FLUX_ONLY and NOT_USE_MIRIAD_SIZE):
+        bmaj, bmin = None, None
     return tt_flux, bmaj, bmin, pa
 
 incr = 1
@@ -356,19 +375,29 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
             # we use 'disk' as IMFIT object rather than Gaussian for non-compact sources with large fluxes
             ltf, lbmaj, lbmin, lpa = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, 
                                               failed_attempts, large_flux=True)
-            if not (ltf is None or ltf <= 0 or np.isnan(ltf) or ltf > MAX_FLUX):
-                total_flux = ltf
-                core_frac = core_flux / total_flux
-                total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
-                bmaj = lbmaj
-                bmin = lbmin
-                pa = lpa
+            pbc_ltf = _primary_beam_correction(ltf, ra, dec, pb_wcs, pb_data)
+            if not (ltf is None or ltf <= 0 or np.isnan(ltf) or pbc_ltf > MAX_FLUX_V5 or pbc_ltf < MIN_FLUX_V5):
+                core_frac = core_flux / ltf
+                total_flux = pbc_ltf
+                if (not MIRIAD_FOR_FLUX_ONLY):
+                    if (NOT_USE_MIRIAD_SIZE):
+                        pass
+                    else:
+                        bmaj = lbmaj
+                        bmin = lbmin
+                    pa = lpa # should we trust the miriad angle?
                 fit_by_disks += 1
 
         if (MIRIAD_FOR_FLUX_ONLY):
             bmaj, bmin = restore_bmaj_bmin(b1, b2, size, clas)
             #bmaj, bmin = max(b1, b2), min(b1, b2)
-            pa = 90 if box_w > box_h else 0
+            if (ALIGN_ANGLE_DUE_WEST):
+                pa = 0 if box_w > box_h else 90 # starting from v11
+            else:
+                pa = 90 if box_w > box_h else 0 # from v1 to v10 this was the case (which is wrong!)
+        elif (NOT_USE_MIRIAD_SIZE):
+            # angle is taken care of by Miriad
+            bmaj, bmin = restore_bmaj_bmin(b1, b2, size, clas)
        
         out_line = [start_id, ra, dec, ra, dec, total_flux, core_frac, bmaj, bmin, pa, size, clas]#, origin_flux, core_flux, source_of_flux]
         out_line = [str(x) for x in out_line]
@@ -378,7 +407,7 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
     
     if (fit_by_disks > 0):
         print('Fit by disks: %d' % fit_by_disks)
-    ver = 8
+    ver = 9
     submit_fn = 'icrar_%dMHz_1000h_v%d.txt' % (freq_dict[FREQ], ver)
     while(osp.exists(submit_fn)):
         ver += 1

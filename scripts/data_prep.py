@@ -235,7 +235,7 @@ def _gen_single_bbox(fits_fn, ra, dec, major, minor, pa, for_png=False):
         return []
     new_area = (yp_max - yp_min) * (xp_max - xp_min)
 
-    if (origin_area / new_area > 2):
+    if (origin_area / new_area > 4):
         print('cropped box is too small, discarding...')
         return []
     return (xp_min, yp_min, xp_max, yp_max, height, width, cx, cy)
@@ -427,10 +427,11 @@ def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, pb, fancy=T
         img_d = {'id': idx, 'license': 1, 'file_name': '%s' % png_fn, 'height':h, 'width': w}
         fid_dict[png_fn] = idx
         images.append(img_d)
-    print(fid_dict)
+    #print(fid_dict)
     valid_source_cc = 0
     with open(cat_csv, 'r') as fin:
         lines = fin.read().splitlines()
+    has_done = set()
     for idx, line in enumerate(lines[1:]): #skip the header, test the first few only
         if (idx % 1000 == 0):
             print("scanned %d" % idx)
@@ -449,6 +450,16 @@ def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, pb, fancy=T
             continue
         for fd in res:
             fid = fd[0]
+            png_fid = fid.replace('.fits', '.png')
+            if (png_fid not in fid_dict):
+                # corresponding image is not in the training/testing set.
+                # print("Image {1} not in the current set for source {0}".format(source_id, png_fid))
+                continue
+            else:
+                image_id = fid_dict[png_fid]
+            pkey = 's%s__i%s' % (source_id, image_id)
+            if pkey in has_done:
+                continue
             fits_img = osp.join(split_fits_dir, fid)
             if (fid not in sigma_dict):
                 sigma, med, _ = obtain_sigma(fits_img)
@@ -459,11 +470,6 @@ def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, pb, fancy=T
             if avg_image_flux < clip_level:
                 continue
             #print(fid)
-            png_fid = fid.replace('.fits', '.png')
-            if (png_fid not in fid_dict):
-                # corresponding image is not in the training/testing set.
-                # print("Image {1} not in the current set for source {0}".format(source_id, png_fid))
-                continue
             
             rrr = _gen_single_bbox(fits_img, ra, dec, major, minor, pa, for_png=True)
             if (len(rrr) == 0):
@@ -480,9 +486,10 @@ def prepare_json(cat_csv, split_fits_dir, split_png_dir, table_name, pb, fancy=T
             anno['id'] = valid_source_cc#source_id
             anno['source_id'] = source_id
             #anno['flux'] = (float(lll[5]) - flux_mean) / flux_std
-            anno['image_id'] = fid_dict[png_fid]
+            anno['image_id'] = image_id
             anno['iscrowd'] = 0
             annolist.append(anno)
+            has_done.add(pkey)
             #print(anno)
     print('%d valid sources on %d images' % (valid_source_cc, len(fid_dict)))
     
@@ -622,15 +629,15 @@ if __name__ == '__main__':
     #png_dir = osp.join(data_dir, 'split_B5_1000h_png_val')
     tgt_png_dir = osp.join(data_dir, 'split_B5_1000h_png_gt')
     #png_dir = osp.join(data_dir, 'split_B5_1000h_png_val')
-    png_dir = osp.join(data_dir, 'split_B5_1000h_png_train')
+    png_dir = osp.join(data_dir, 'split_B5_1000h_png_val')
     #fits2png(fits_cutout_dir, png_dir)
     pb = osp.join(data_dir, 'PrimaryBeam_B5.fits')
-    draw_gt(train_csv, fits_cutout_dir, png_dir, tablename, pb, tgt_png_dir, fancy=True)
-    # images, annolist = prepare_json(train_csv, fits_cutout_dir, png_dir, tablename, pb)
-    # anno = create_coco_anno()
-    # anno['images'] = images
-    # anno['annotations'] = annolist
-    # with open(osp.join(data_dir, 'instances_val_B2_1000h.json'), 'w') as fout:
-    #     json.dump(anno, fout)
+    # draw_gt(train_csv, fits_cutout_dir, png_dir, tablename, pb, tgt_png_dir, fancy=True)
+    images, annolist = prepare_json(train_csv, fits_cutout_dir, png_dir, tablename, pb)
+    anno = create_coco_anno()
+    anno['images'] = images
+    anno['annotations'] = annolist
+    with open(osp.join(data_dir, 'instances_val_B5_1000h.json'), 'w') as fout:
+        json.dump(anno, fout)
     #output_fn = osp.join(data_dir, 'flux_compare')
     #verify_flux(train_csv, fits_cutout_dir, png_dir, tablename, pb, output_fn)

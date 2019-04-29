@@ -29,7 +29,7 @@ b5_median = -5.2342429e-11
 #b1_sigma = 3.8185009938219004e-07 #
 #b1_median = -1.9233363e-07 #
 
-num_sigma = 1
+num_sigma = 0.05
 
 b1_three_sigma = b1_median + num_sigma * b1_sigma
 b2_three_sigma = b2_median + num_sigma * b2_sigma
@@ -189,7 +189,7 @@ def gen_ds9_region(cat_csv, fits_img, pb, consider_psf=True, fancy=True):
             total_flux = float(fds[5])
             total_flux = _primary_beam_gridding(total_flux, ra_centroid, dec_centroid, pb_wcs, pb_data)
             total_flux /= area_pixel
-            if (total_flux < b2_three_sigma):
+            if (total_flux < b5_three_sigma):
                 faint += 1
                 continue
             ellipses.append(e_fmt % (ra_centroid, dec_centroid, b1 / 2, b2 / 2, pa))
@@ -210,11 +210,11 @@ def gen_ds9_region(cat_csv, fits_img, pb, consider_psf=True, fancy=True):
 if __name__ == '__main__':
     cur_dir = os.path.dirname(os.path.abspath(__file__))
     data_dir = os.path.join(cur_dir, '..', 'data')
-    train_file = 'TrainingSet_B2_v2.txt'
-    train_csv = 'TrainingSet_B2_v2.csv'
-    whole_field = 'SKAMid_B2_1000h_v3.fits'
-    train_field = 'SKAMid_B2_1000h_v3_train_image.fits'
+    train_file = 'TrainingSet_B5_v2.txt'
+    train_csv = 'TrainingSet_B5_v2.csv'
+    whole_field = 'SKAMid_B5_1000h_v3.fits'
+    train_field = 'SKAMid_B5_1000h_v3_train_image.fits'
     #convert_to_csv(os.path.join(data_dir, train_file))
     #cutout_training_image(osp.join(data_dir, train_csv), osp.join(data_dir, whole_field))
-    pb = 'PrimaryBeam_B2.fits'
+    pb = 'PrimaryBeam_B5.fits'
     gen_ds9_region(osp.join(data_dir, train_csv), osp.join(data_dir, train_field), osp.join(data_dir, pb))
