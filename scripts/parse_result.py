@@ -22,16 +22,18 @@ V7 - Large fluxes using disk_fitting + size_angle_using_miriad
 V8 - ALL gaussian fitting + size_angle_using_miriad
 V9 - core_flux should be synthesis beam corrected (TBD)
 """
-FREQ = 'B1'
-DISK_THRESHOLD = 10 ** -3.6 # or NONE, meaning don't do disk fitting ever
+FREQ = 'B5'
+DISK_THRESHOLD = None #10 ** -3.6 # or NONE, meaning don't do disk fitting ever
 
 # this is True for v5, v6, v9, v11
-MIRIAD_FOR_FLUX_ONLY = False
+MIRIAD_FOR_FLUX_ONLY = True
 
 ALIGN_ANGLE_DUE_WEST = True # for some reason, this was wrongly set to false until v11
 
 # this is True for v10, False for v7 and v8
 NOT_USE_MIRIAD_SIZE = True # this is used only if MIRIAD_FOR_FLUX_ONLY is False
+
+SOURCE_PB_THRESHOLD = 0.02 # None means no such threshold
 
 flux_rg_dict = {'B1': (10 ** -5.869366, 10 ** 1.269625), 
                 'B2': (10 ** -6.0987263, 10 ** 0.7686931), 
@@ -196,6 +198,8 @@ def _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data):
     x, y = pb_wcs.wcs_world2pix([[ra, dec, 0, 0]], 0)[0][0:2]
     #print(pb_data.shape)
     pbv = pb_data[int(y)][int(x)]
+    if (SOURCE_PB_THRESHOLD is not None and pbv < SOURCE_PB_THRESHOLD):
+        return None
     #print(x, y, pbv)
     return total_flux / pbv
 
@@ -371,6 +375,8 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
         core_frac = core_flux / total_flux
         #origin_flux = total_flux
         total_flux = _primary_beam_correction(total_flux, ra, dec, pb_wcs, pb_data)
+        if (total_flux is None):
+            continue
         if (DISK_THRESHOLD is not None and total_flux > DISK_THRESHOLD):
             # we use 'disk' as IMFIT object rather than Gaussian for non-compact sources with large fluxes
             ltf, lbmaj, lbmin, lpa = _get_integrated_flux(mir_file, x1, h - y2, x2, h - y1, h, w, 
@@ -407,7 +413,7 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
     
     if (fit_by_disks > 0):
         print('Fit by disks: %d' % fit_by_disks)
-    ver = 9
+    ver = 15
     submit_fn = 'icrar_%dMHz_1000h_v%d.txt' % (freq_dict[FREQ], ver)
     while(osp.exists(submit_fn)):
         ver += 1
@@ -418,11 +424,11 @@ def parse_single(result_file, fits_dir, mir_dir, pb_fn, start_id=1, threshold=0.
         fout.write(fc)
 
 if __name__ == '__main__':
-    result_file = '21592081.result'
-    #result_file = '%s_v1.result' % FREQ
+    #result_file = '21592081.result'
+    result_file = '%s_v2.result' % FREQ
     fits_dir = 'split_%s_1000h_test' % FREQ
     mir_dir = 'split_%s_1000h_test_mir' % FREQ
     pb = 'PrimaryBeam_%s.fits' % FREQ
-    parse_single(result_file, fits_dir, mir_dir, pb, start_id=0, threshold=0.8)
+    parse_single(result_file, fits_dir, mir_dir, pb, start_id=0, threshold=1.0)
     #visual_result(result_file, fits_dir, 'reg_out')
 
